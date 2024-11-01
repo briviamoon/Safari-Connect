@@ -1,0 +1,12 @@
+# /etc/config/network
+config interface 'loopback' # type: ignore
+    option device 'lo' # type: ignore
+    option proto 'static' # type: ignore
+    option ipaddr '127.0.0.1' # type: ignore
+    option netmask '255.0.0.0' # type: ignore
+
+config interface 'lan' # type: ignore
+    option device 'eth0' # type: ignore
+    option proto 'static' # type: ignore
+    option ipaddr '192.168.1.1' # type: ignore
+    option netmask '255.255.255.0' # type: ignore

@@ -1,0 +1,15 @@
+# Firewall rules (/etc/config/firewall)
+# Allow access to captive portal
+config rule
+    option name 'Allow-Captive-Portal'
+    option src 'lan'
+    option dest_port '80'
+    option proto 'tcp'
+    option target 'ACCEPT'
+
+# Block all other traffic for unauthenticated users
+config rule
+    option name 'Block-Unauthenticated'
+    option src 'lan'
+    option proto 'all'
+    option target 'DROP'

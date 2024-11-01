@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Safari Connect</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="shortcut icon" href="./resources/polotno.svg" type="image/x-icon">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.2/axios.min.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <div class="card">
+            <p style="font-size: medium; font-weight: 300;font-style:italic; font-family: Arial, Helvetica, sans-serif;">Explore A Universe Of Possibilities</p>
+            <div class="icon-container">
+                <img class="safari-icon" src="resources/safari-icon2.svg" alt="safari connect">
+            </div>
+            <h1>Safari Connect</h1>
+
+            <!-- Registration Form -->
+            <div id="registerForm">
+                <div class="form-group">
+                    <label for="phone">Phone Number</label>
+                    <input type="tel" id="phone" style="text-align: center;" placeholder="Enter your phone number" required>
+                </div>
+                <button onclick="register()">Register</button>
+            </div>
+
+            <!-- OTP Verification Form -->
+            <div id="otpForm" class="hidden">
+                <div class="form-group">
+                    <label for="otp">Enter OTP</label>
+                    <input type="text" id="otp" placeholder="Enter OTP code" required>
+                </div>
+                <button onclick="verifyOTP()">Verify OTP</button>
+            </div>
+
+            <!-- Subscription Plans -->
+            <div id="plansForm" class="hidden">
+                <h2>Choose a Plan</h2>
+                <div class="plans">
+                    <div class="plan-card" onclick="selectPlan('1hr')">
+                        <h3>1 Hour</h3>
+                        <p>KSh 10</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('2hrs')">
+                        <h3>2 Hours</h3>
+                        <p>KSh 20</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('3hrs')">
+                        <h3>3 Hours</h3>
+                        <p>KSh 30</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('8hrs')">
+                        <h3>8 Hours</h3>
+                        <p>KSh 80</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('12hrs')">
+                        <h3>12 Hours</h3>
+                        <p>KSh 100</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('24hrs')">
+                        <h3>24 Hours</h3>
+                        <p>KSh 150</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('72hrs')">
+                        <h3> 3 Days</h3>
+                        <p>KSh 250</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('168hrs')">
+                        <h3>1 Week</h3>
+                        <p>KSh 350</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('336hrs')">
+                        <h3>2 Weeks</h3>
+                        <p>KSh 1050</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('monthly')">
+                        <h3>Monthly</h3>
+                        <p>KSh 2000</p>
+                    </div>
+                </div>
+                <button onclick="subscribe()" class="hidden" id="subscribeBtn">Subscribe</button>
+            </div>
+        </div>
+    </div>
+    <script src="index.js"></script>
+</body>
+
+</html>

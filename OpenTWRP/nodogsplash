@@ -1,0 +1,14 @@
+# /etc/config/nodogsplash
+config nodogsplash
+    option enabled '1'
+    option gatewayname 'WiFi Hotspot'
+    option gatewayinterface 'br-lan'
+    option maxclients '250'
+    option clientidletimeout '1440'
+    option webroot '/etc/nodogsplash/htdocs'
+    option redirecturl 'http://your-portal-url'
+    
+# Authentication script
+option authenticateimmediately '0'
+option passwordattempts '5'
+option gatewayiprange '192.168.1.0/24'

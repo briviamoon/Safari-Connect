@@ -1,5 +1,7 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from Backend.captive.CaptivePortalAPI import get_db, PaymentRecord, Subscription, engine
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 import requests
 import base64
 from datetime import datetime, timedelta
@@ -82,7 +84,7 @@ class MPESAPayment:
             
         return response.json()
 
-
+app = FastAPI()
 
 # FastAPI routes for M-Pesa integration
 @app.post("/mpesa/initiate")
@@ -138,7 +140,7 @@ async def store_checkout_request(checkout_id: str, subscription_id: int, db: Ses
     """When initiating an M-Pesa transaction, you will receive a CheckoutRequestID that serves as a unique identifier.
     Store this ID and subscription_id in the database to verify payment status later."""
     payment_record = PaymentRecord(
-        checkout_id-checkout_id,
+        checkout_id=checkout_id,
         subscription_id=subscription_id,
         status="Pending" # initial status
     )

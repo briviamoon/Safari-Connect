@@ -2,6 +2,16 @@ const API_BASE_URL = 'http://your-api-url';
 let selectedPlan = null;
 let currentUser = null;
 
+async function getMacAddress() {
+    try {
+        const response = await axios.get(`${API_BASE_URL}/mac-address`);
+        return response.data.mac_address || "MAC not found";
+    } catch (error) {
+        console.error("Failed to retrieve MAC address:", error);
+        return "Error retrieving MAC";
+    }
+}
+
 async function register() {
     const phone = document.getElementById('phone').value;
     try {
@@ -56,11 +66,7 @@ async function subscribe() {
     }
 }
 
-async function getMacAddress() {
-    // This is a placeholder. In reality, you'd need to implement this
-    // based on your network setup
-    return "00:00:00:00:00:00";
-}
+
 
 function showError(message) {
     const error = document.createElement('div');

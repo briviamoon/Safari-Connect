@@ -1,79 +1,33 @@
+import random, socket, platform, uuid, logging, requests, jwt, subprocess, sys, os
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+
 from fastapi import FastAPI, HTTPException, Depends
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, inspect
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 from Backend.Payment.FastAPI import MPESAPayment
 from typing import Optional
-import random, socket, platform, uuid, logging, requests, jwt, subprocess
+from Backend.database.dataBase import get_db, Subscription, User, OTP
 import africastalking
 
 app = FastAPI()
-Base = declarative_base()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust as per your needs
+    allow_credentials=True,
+    allow_methods=["*"],  # This allows all HTTP methods
+    allow_headers=["*"],  # This allows all headers
+)
+
 S_KEY = "93f2d9b13fe90325b803bf2e8f9a66d205f3ff671990ac11423183d334d86691"
-
-
-# Database Models
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    phone_number = Column(String, unique=True, index=True)
-    mac_address = Column(String)
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
-    is_active = Column(Boolean, default=True)
-
-class Subscription(Base):
-    __tablename__ = "subscriptions"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer)
-    plan_type = Column(String)  # '1hr', '2hrs', '5hrs', 'monthly'
-    amount = Column(Float)
-    start_time = Column(DateTime)
-    end_time = Column(DateTime)
-    is_active = Column(Boolean, default=True)
-
-class OTP(Base):
-    __tablename__ = "otps"
-    id = Column(Integer, primary_key=True, index=True)
-    phone_number = Column(String)
-    otp_code = Column(String)
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
-    is_used = Column(Boolean, default=False)
-
-class PaymentRecord(Base):
-    __tablename__ = "payment_records"
-    id = Column(Integer, primary_key=True, index=True)
-    checkout_id = Column(String, unique=True, index=True)  # The M-Pesa transaction ID
-    subscription_id = Column(Integer)  # Links to the Subscription table
-    status = Column(String, default="Pending")  # Payment status: "Pending", "Successful", or "Failed"
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
-
-
-# Database connection
-DATABASE_URL = "postgresql://admin:5678@localhost/captive_portal"
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoload=True, bind=engine)
-
-#Ensuring the tables are created only once
-inspector = inspect(engine)
-if not inspector.get_table_names():  # Check if tables already exist
-    print("Setting up database tables...")
-    Base.metadata.create_all(bind=engine)
-    print("Tables created.")
-
-# Dependencies
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 # Africa's Talking SMS configuration
 africastalking.initialize(
-    username='YOUR_USERNAME',
-    api_key='YOUR_API_KEY'
+    username='sandbox',
+    api_key='atsk_2c126971a075f8c3ed0dbab580d1e4cb7959577587717d23e5fca0b6387104f4e7079690'
 )
 sms = africastalking.SMS
 
@@ -124,6 +78,7 @@ async def register_user(phone_number: str, mac_address: str, db: Session = Depen
     
     # Generate and send OTP
     otp_code = generate_otp()
+    print(f"OTP: {otp_code}")
     store_otp(db, phone_number, otp_code)
     send_otp_sms(phone_number, otp_code)
     

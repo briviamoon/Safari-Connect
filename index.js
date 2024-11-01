@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://your-api-url';
+const API_BASE_URL = 'http://192.169.0.102:8000';
 let selectedPlan = null;
 let currentUser = null;
 
@@ -34,22 +34,25 @@ async function verifyOTP() {
             phone_number: phone,
             otp_code: otp
         });
-        document.getElementById('otpForm').classList.add('hidden');
-        document.getElementById('plansForm').classList.remove('hidden');
-        currentUser = response.data.token;
+        
+        const token = response.data.token;
+        const decodedToken = parseJwt(token);
+
+        if (decodedToken.subscription_active) {
+            // User has an active subscription
+            showSessionCountdown(decodedToken.time_left);
+        } else {
+            // No active subscription
+            document.getElementById('otpForm').classList.add('hidden');
+            document.getElementById('plansForm').classList.remove('hidden');
+        }
+
+        currentUser = token;
     } catch (error) {
         showError('Invalid OTP. Please try again.');
     }
 }
 
-function selectPlan(plan) {
-    selectedPlan = plan;
-    document.querySelectorAll('.plan-card').forEach(card => {
-        card.classList.remove('selected');
-    });
-    event.currentTarget.classList.add('selected');
-    document.getElementById('subscribeBtn').classList.remove('hidden');
-}
 
 async function subscribe() {
     if (!selectedPlan || !currentUser) return;
@@ -67,6 +70,14 @@ async function subscribe() {
 }
 
 
+function selectPlan(plan) {
+    selectedPlan = plan;
+    document.querySelectorAll('.plan-card').forEach(card => {
+        card.classList.remove('selected');
+    });
+    event.currentTarget.classList.add('selected');
+    document.getElementById('subscribeBtn').classList.remove('hidden');
+}
 
 function showError(message) {
     const error = document.createElement('div');
@@ -82,4 +93,40 @@ function showSuccess(message) {
     success.textContent = message;
     document.querySelector('.card').appendChild(success);
     setTimeout(() => success.remove(), 3000);
+}
+
+function parseJwt(token) {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+    }).join(''));
+
+    return JSON.parse(jsonPayload);
+}
+
+function showSessionCountdown(timeLeft) {
+    const countdownContainer = document.createElement('div');
+    countdownContainer.className = 'countdown-container';
+    document.querySelector('.card').innerHTML = ''; // Clear previous content
+    document.querySelector('.card').appendChild(countdownContainer);
+
+    function updateCountdown() {
+        if (timeLeft <= 0) {
+            clearInterval(countdownInterval);
+            countdownContainer.textContent = 'Session expired. Please select a plan.';
+            document.getElementById('plansForm').classList.remove('hidden');
+            return;
+        }
+
+        const hours = Math.floor(timeLeft / 3600);
+        const minutes = Math.floor((timeLeft % 3600) / 60);
+        const seconds = Math.floor(timeLeft % 60);
+
+        countdownContainer.textContent = `Session time left \n ${hours}h ${minutes}m ${seconds}s`;
+        timeLeft--;
+    }
+
+    const countdownInterval = setInterval(updateCountdown, 1000);
+    updateCountdown();
 }

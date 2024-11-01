@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
-from Backend.captive.CaptivePortalAPI import get_db, PaymentRecord, Subscription, engine
+from fastapi.middleware.cors import CORSMiddleware
+from Backend.database.dataBase import get_db, PaymentRecord, Subscription
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import requests
@@ -7,12 +8,22 @@ import base64
 from datetime import datetime, timedelta
 import json
 
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust as per your needs
+    allow_credentials=True,
+    allow_methods=["*"],  # This allows all HTTP methods
+    allow_headers=["*"],  # This allows all headers
+)
+
 class MPESACredentials:
-    CONSUMER_KEY = "your_consumer_key"
-    CONSUMER_SECRET = "your_consumer_secret"
-    PASSKEY = "your_passkey"
-    BUSINESS_SHORT_CODE = "your_shortcode"  # Usually your Paybill number
-    CALLBACK_URL = "https://your-domain.com/mpesa/callback"
+    CONSUMER_KEY = "O7VPs1yZAADxdI4nszyxI4lAN8IXCX2Glf0gRcNm5SgG5b48"
+    CONSUMER_SECRET = "CrKa9Fu9hB65bpNKSF03ZWqCR8QdrHhvGZFjVRSRVM2Jb7ynfx7ctTtJUY0KEhKG"
+    PASSKEY = "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"
+    BUSINESS_SHORT_CODE = "174379"  # Usually your Paybill number
+    CALLBACK_URL = "https://1b61-41-209-3-162.ngrok-free.app"
 
 
 class MPESAPayment:
@@ -84,7 +95,6 @@ class MPESAPayment:
             
         return response.json()
 
-app = FastAPI()
 
 # FastAPI routes for M-Pesa integration
 @app.post("/mpesa/initiate")

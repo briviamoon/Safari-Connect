@@ -1,6 +1,7 @@
-const API_BASE_URL = 'http://192.169.0.102:8000';
+const API_BASE_URL = 'https://8d71-41-209-3-162.ngrok-free.app'//'http://192.168.0.102:8000' //'https://489c-41-209-3-162.ngrok-free.app';
 let selectedPlan = null;
 let currentUser = null;
+let paymentStatusInterval = null;
 
 async function getMacAddress() {
     try {
@@ -14,14 +15,20 @@ async function getMacAddress() {
 
 async function register() {
     const phone = document.getElementById('phone').value;
+    const macAddress = await getMacAddress();
+    console.log({
+        phone_number: phone,
+        mac_address: macAddress
+    });
     try {
         const response = await axios.post(`${API_BASE_URL}/register`, {
             phone_number: phone,
-            mac_address: await getMacAddress()
+            mac_address: macAddress
         });
         document.getElementById('registerForm').classList.add('hidden');
         document.getElementById('otpForm').classList.remove('hidden');
     } catch (error) {
+        console.error("Registration failed:", error);
         showError('Registration failed. Please try again.');
     }
 }
@@ -34,7 +41,7 @@ async function verifyOTP() {
             phone_number: phone,
             otp_code: otp
         });
-        
+
         const token = response.data.token;
         const decodedToken = parseJwt(token);
 
@@ -47,7 +54,8 @@ async function verifyOTP() {
             document.getElementById('plansForm').classList.remove('hidden');
         }
 
-        currentUser = token;
+        currentUser = decodedToken;
+        console.log(currentUser);
     } catch (error) {
         showError('Invalid OTP. Please try again.');
     }
@@ -55,20 +63,63 @@ async function verifyOTP() {
 
 
 async function subscribe() {
-    if (!selectedPlan || !currentUser) return;
+    // Ensuring selected plan and current user details are available
+    if (!selectedPlan) {
+        showError("Please select a subscription plan.");
+        return;
+    }
+    
+    if (!currentUser || !currentUser.user_id) {
+        showError("User information is missing. Please try re-verifying your OTP.");
+        return;
+    }
+
     try {
-        const response = await axios.post(`${API_BASE_URL}/subscribe`, {
-            plan_type: selectedPlan
-        }, {
-            headers: { Authorization: `Bearer ${currentUser}` }
-        });
-        // Handle M-Pesa payment initiation
-        showSuccess('Subscription initiated. Please complete payment on your phone.');
+        // request data
+        const requestData = {
+            user_id: currentUser.user_id,  // Ensure user_id is correct
+            plan_type: selectedPlan        // Ensure plan_type is set to selected plan
+        };
+        console.log("Subscription request data:", requestData); // For debugging
+
+        // Send request to backend
+        const response = await axios.post(`${API_BASE_URL}/subscribe`, requestData);
+
+        startPaymentStatusPolling();
+        
+        // Handle response after successful subscription initiation
+        if (response.data && response.data.message) {
+            showSuccess(response.data.message);
+        } else {
+            showSuccess("Subscription initiated. Please complete payment on your phone.");
+        }
     } catch (error) {
-        showError('Subscription failed. Please try again.');
+        console.error("Subscription error:", error.response ? error.response.data : error.message);
+        showError("Subscription failed. Please try again.");
     }
 }
 
+async function checkPaymentStatus() {
+    try {
+        const response = await axios.get(`${API_BASE_URL}/subscription-status`, {
+            params: { user_id: currentUser.user_id }
+        });
+        
+        if (response.data.subscription_active) {
+            showSuccess("Payment successful. Subscription activated!");
+            clearInterval(paymentStatusInterval);
+            // Update UI to reflect active session
+            // Start countdown with time_left from the server
+            showSessionCountdown(response.data.time_left);
+        } else {
+            console.log("Payment still processing...");
+        }
+    } catch (error) {
+        console.error("Error checking payment status:", error);
+    }
+}
+
+// functions //
 
 function selectPlan(plan) {
     selectedPlan = plan;
@@ -98,10 +149,10 @@ function showSuccess(message) {
 function parseJwt(token) {
     const base64Url = token.split('.')[1];
     const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+    const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
         return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
     }).join(''));
-
+    
     return JSON.parse(jsonPayload);
 }
 
@@ -110,23 +161,30 @@ function showSessionCountdown(timeLeft) {
     countdownContainer.className = 'countdown-container';
     document.querySelector('.card').innerHTML = ''; // Clear previous content
     document.querySelector('.card').appendChild(countdownContainer);
-
+    
     function updateCountdown() {
         if (timeLeft <= 0) {
             clearInterval(countdownInterval);
             countdownContainer.textContent = 'Session expired. Please select a plan.';
             document.getElementById('plansForm').classList.remove('hidden');
+            checkPaymentStatus();
             return;
         }
-
+        
         const hours = Math.floor(timeLeft / 3600);
         const minutes = Math.floor((timeLeft % 3600) / 60);
         const seconds = Math.floor(timeLeft % 60);
-
+        
         countdownContainer.textContent = `Session time left \n ${hours}h ${minutes}m ${seconds}s`;
         timeLeft--;
     }
-
+    
     const countdownInterval = setInterval(updateCountdown, 1000);
     updateCountdown();
+}
+
+// Start polling every 5 seconds after initiating payment
+function startPaymentStatusPolling() {
+    if (paymentStatusInterval) clearInterval(paymentStatusInterval);
+    paymentStatusInterval = setInterval(checkPaymentStatus, 5000);
 }

@@ -1,24 +1,26 @@
-import random, socket, platform, uuid, logging, requests, jwt, subprocess, sys, os
-# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
-
-from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+import random, socket, platform, uuid, logging
+import requests, jwt, subprocess, sys, os, asyncio
+from fastapi import FastAPI, HTTPException, Depends, Request
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta, timezone
-from Backend.Payment.FastAPI import MPESAPayment
+from Backend.Payment.payment import MPESAPayment
 from typing import Optional
 from Backend.database.dataBase import get_db, Subscription, User, OTP
+from pydantic import BaseModel
 import africastalking
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust as per your needs
+    allow_origins=["*"],  # Specify your allowed origins in production
     allow_credentials=True,
-    allow_methods=["*"],  # This allows all HTTP methods
-    allow_headers=["*"],  # This allows all headers
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 S_KEY = "93f2d9b13fe90325b803bf2e8f9a66d205f3ff671990ac11423183d334d86691"
@@ -33,67 +35,107 @@ sms = africastalking.SMS
 
 ##########################################################################################
 
+# Routes
+
+@app.get("/")
+async def root():
+    return {
+        "name": "Safari Connect Captive Portal API",
+        "version": "1.0.0"
+    }
+
+############################################
 
 #Get Client MAC ADDRESS
-from fastapi import Request
 
 @app.get("/mac-address")
-async def get_mac_address(request: Request):
-    # Try to retrieve the MAC address based on network setup; this might vary
+async def get_mac_address(req: Request):
+    if not isinstance(req, Request):
+        logging.error("Received a non-Request object.")
+        return {
+            "status": "error",
+            "message": "Invalid request object"
+        }
+
     try:
-        client_ip = request.client.host
-        logging.info("ttempting to retreive MAC fro IP: {client_ip}")
-        mac_address = get_mac_address(client_ip)
-    
-        if mac_address:
-            return {
-                "status": "success",
-                "mac_address": mac_address,
-                "client_ip": client_ip
-            }
+        print(f"Request type: {type(req)}")
+        client_ip = req.client.host
+        logging.info(f"Attempting to retrieve MAC for IP: {client_ip}")
+        
+        # if async is still waiting ...
+        if asyncio.iscoroutinefunction(get_mac_from_ip):
+            mac_address = await get_mac_from_ip(client_ip)
         else:
-            return {
-                "status": "error",
-                "message": "MAC address could not be retreived",
-                "client_ip": client_ip
-            }
+            mac_address = get_mac_from_ip(client_ip)
+        
+        # Check if MAC address was successfully retrieved; otherwise use fallback
+        if not mac_address:
+            mac_address = "00:00:00:00:00:00"  # Placeholder for unobtainable MAC
+        
+        return {
+            "status": "success" if mac_address else "error",
+            "mac_address": mac_address,
+            "client_ip": client_ip
+        }
     except Exception as e:
         logging.error(f"Error in MAC address endpoint: {e}")
         return {
             "status": "error",
-            "message": "An Unexpected error ocured",
-            "client_ip": client_ip
+            "message": "An unexpected error occurred",
+            "client_ip": client_ip if 'client_ip' in locals() else "unknown"
         }
-    
 
 ######################################
 
+# model for the registration request
+class RegisterRequest(BaseModel):
+    phone_number: str
+    mac_address: str
 
-# Routes
 @app.post("/register")
-async def register_user(phone_number: str, mac_address: str, db: Session = Depends(get_db)):
-    user = User(phone_number=phone_number, mac_address=mac_address)
-    db.add(user)
-    db.commit()
+async def register_user(request: RegisterRequest, db: Session = Depends(get_db)):
+    # Check if the user already exists
+    existing_user = db.query(User).filter(User.phone_number == request.phone_number).first()
+    if existing_user:
+        # Resend OTP for the existing user
+        otp_code = generate_otp()
+        print(f"TOP: {otp_code}")
+        store_otp(db, request.phone_number, otp_code)
+        send_otp_sms(request.phone_number, otp_code)
+        return {"message": "User already registered. New OTP sent for verification."}
     
-    # Generate and send OTP
-    otp_code = generate_otp()
-    print(f"OTP: {otp_code}")
-    store_otp(db, phone_number, otp_code)
-    send_otp_sms(phone_number, otp_code)
-    
-    return {"message": "Registration initiated"}
+    # If user does not exist, proceed to create a new entry
+    try:
+        user = User(phone_number=request.phone_number, mac_address=request.mac_address)
+        db.add(user)
+        db.commit()
+        
+        # Generate and send OTP for the new registration
+        otp_code = generate_otp()
+        print(f"TOP: {otp_code}")
+        store_otp(db, request.phone_number, otp_code)
+        send_otp_sms(request.phone_number, otp_code)
+        
+        return {"message": "Registration initiated. OTP sent for verification."}
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="User registration failed due to a database error.")
+
 
 
 #######################################
 
+class OtpRight (BaseModel):
+    phone_number: str
+    otp_code: str
+
 # Endpointto verify OTP
 @app.post("/verify-otp")
-async def verify_otp(phone_number: str, otp_code: str, db: Session = Depends(get_db)):
+async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
     #check is OTP is valid and not used
     otp = db.query(OTP).filter(
-        OTP.phone_number == phone_number,
-        OTP.otp_code == otp_code,
+        OTP.phone_number == re.phone_number,
+        OTP.otp_code == re.otp_code,
         OTP.is_used == False
     ).first()
     
@@ -105,7 +147,7 @@ async def verify_otp(phone_number: str, otp_code: str, db: Session = Depends(get
     db.commit()
     
     # Check if the user is registered
-    user = db.query(User).filter(User.phone_number == phone_number).first()
+    user = db.query(User).filter(User.phone_number == re.phone_number).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not registered")
     
@@ -118,7 +160,11 @@ async def verify_otp(phone_number: str, otp_code: str, db: Session = Depends(get
 
     #if there's an active subscription, Generate a token leading to the countdown to the end of their session.
     if active_subscription:
-        time_left = active_subscription.endtime - datetime.now(timezone.utc)
+        # Convert `end_time` to UTC if it is offset-naive
+        if active_subscription.end_time.tzinfo is None:
+            active_subscription.end_time = active_subscription.end_time.replace(tzinfo=timezone.utc)
+        
+        time_left = active_subscription.end_time - datetime.now(timezone.utc)
         
         session_data = {
             "sub": user.phone_number,
@@ -142,44 +188,76 @@ async def verify_otp(phone_number: str, otp_code: str, db: Session = Depends(get
         token = create_access_token(access_data)
         return {"token": token, "message": "No active subscription. Pleade select a plan"}
 
+
+
 #########################################################
+# Base for subscription request components
+class SubRequest (BaseModel):
+    user_id: int
+    plan_type: str
 
 # Endpoint for Subscription Creation
 @app.post("/subscribe")
-async def create_subscription(
-    user_id: int,
-    plan_type: str,
-    db: Session = Depends(get_db)
+async def create_subscription(request: SubRequest, db: Session = Depends(get_db)
 ):
     # Plan configurations
     plans = {
-        "1hr": {"amount": 10, "duration": timedelta(hours=1)},
+        "1hr": {"amount": 1, "duration": timedelta(hours=1)},
         "2hrs": {"amount": 25, "duration": timedelta(hours=2)},
-        "5hrs": {"amount": 65, "duration": timedelta(hours=5)},
-        "monthly": {"amount": 500, "duration": timedelta(days=30)}
+        "3hrs": {"amount": 35, "duration": timedelta(hours=3)},
+        "8hrs": {"amount": 80, "duration": timedelta(hours=8)},
+        "12hrs": {"amount": 100, "duration": timedelta(hours=12)},
+        "24hrs": {"amount": 150, "duration": timedelta(days=1)},
+        "3 days": {"amount": 300, "duration": timedelta(days=3)},
+        "1 week": {"amount": 550, "duration": timedelta(weeks=1)},
+        "2 weeks": {"amount": 1000, "duration": timedelta(weeks=2)},
+        "monthly": {"amount": 1750, "duration": timedelta(days=30)}
     }
     
-    if plan_type not in plans:
+    if request.plan_type not in plans:
         raise HTTPException(status_code=400, detail="Invalid plan type")
     
-    plan = plans[plan_type]
+    plan = plans[request.plan_type]
     subscription = Subscription(
-        user_id=user_id,
-        plan_type=plan_type,
+        user_id=request.user_id,
+        plan_type=request.plan_type,
         amount=plan["amount"],
         start_time=datetime.now(timezone.utc),
         end_time=datetime.now(timezone.utc) + plan["duration"]
     )
-    
+    print(f"Your subscription is \n {Subscription}")
     db.add(subscription)
     db.commit()
     
     # Initiate M-Pesa payment
-    response = initiate_mpesa_payment(subscription.id, plan["amount"], db)
+    response = await initiate_mpesa_payment(subscription.id, plan["amount"], db)
     
     return {"message": "Subscription initiated, payment pending", "mpesa_response": response}
 
-###############################
+##################################################
+
+#creating a subscription status checker
+@app.get("/subscription-status")
+async def subscription_status(user_id: int, db: Session = Depends(get_db)):
+    subscription = db.query(Subscription).filter(
+        Subscription.user_id == user_id,
+        Subscription.is_active == True
+    ).first()
+
+    # Calculate time left in seconds if there's an active subscription
+    if subscription:
+        # Ensure `end_time` is timezone-aware
+        if subscription.end_time.tzinfo is None:
+            subscription.end_time = subscription.end_time.replace(tzinfo=timezone.utc)
+        
+        time_left = (subscription.end_time - datetime.now(timezone.utc)).total_seconds()
+        return {"subscription_active": True, "time_left": max(time_left, 0)}
+    
+    # Return inactive status if no subscription found
+    return {"subscription_active": False, "time_left": 0}
+
+
+####################################################
 
 # RETURNING USERS #
 
@@ -225,10 +303,13 @@ def send_otp_sms(phone_number: str, otp_code: str):
 
 
 #Create an Access Token
-def create_access_token(phone_number: str):
-    to_encode = {"sub": phone_number}
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(minutes=30)  # Expiry as needed
+    to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, S_KEY, algorithm="HS256")
     return encoded_jwt
+
 
 
 #Initialize Mpesa Payment
@@ -245,11 +326,13 @@ def initiate_mpesa_payment(subscription_id: int, amount: float, db: Session):
     
     try:
         # STK PUSH INITIATE
+        print("Initiating Mpesa STK Push Now")
         response = mpesa_payment.initiate_stk_push(
             phone_number=phone_number,
             amount=amount,
             reference=str(subscription_id) # unique to match with callback
         )
+        logging.info(f"In the initiate_mpesa_payment call, this is the response: \n {response}")
         return response
     except Exception as e:
         print(f"Error initializing payment: {e}")

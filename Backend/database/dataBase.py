@@ -37,14 +37,19 @@ class PaymentRecord(Base):
     id = Column(Integer, primary_key=True, index=True)
     checkout_id = Column(String, unique=True, index=True)  # The M-Pesa transaction ID
     subscription_id = Column(Integer)  # Links to the Subscription table
-    status = Column(String, default="Pending")  # Payment status: "Pending", "Successful", or "Failed"
+    status = Column(String, default="Pending")  # Payment status
+    amount = Column(Float, nullable=True)
+    mpesa_receipt_number = Column(String, nullable=True)
+    transaction_date = Column(DateTime, nullable=True)
+    phone_number = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.now(timezone.utc))
+
 
 
 # Database connection
 DATABASE_URL = "postgresql://safariconnect:1Amodung%40%21.@192.168.0.102:5432/captive_portal"
 engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoload=True, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, bind=engine)
 
 #Ensuring the tables are created only once
 inspector = inspect(engine)

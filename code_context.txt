@@ -1,25 +1,27 @@
 // File: Backend/captive/CaptivePortalAPI.py
-import random, socket, platform, uuid, logging, requests, jwt, subprocess, sys, os
-# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
-
-from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+import random, socket, platform, uuid, logging
+import requests, jwt, subprocess, sys, os, asyncio
+from fastapi import FastAPI, HTTPException, Depends, Request
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta, timezone
-from Backend.Payment.FastAPI import MPESAPayment
+from Backend.Payment.payment import MPESAPayment
 from typing import Optional
 from Backend.database.dataBase import get_db, Subscription, User, OTP
+from pydantic import BaseModel
 import africastalking
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust as per your needs
+    allow_origins=["*"],  # Specify your allowed origins in production
     allow_credentials=True,
-    allow_methods=["*"],  # This allows all HTTP methods
-    allow_headers=["*"],  # This allows all headers
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 S_KEY = "93f2d9b13fe90325b803bf2e8f9a66d205f3ff671990ac11423183d334d86691"
@@ -34,67 +36,107 @@ sms = africastalking.SMS
 
 ##########################################################################################
 
+# Routes
+
+@app.get("/")
+async def root():
+    return {
+        "name": "Safari Connect Captive Portal API",
+        "version": "1.0.0"
+    }
+
+############################################
 
 #Get Client MAC ADDRESS
-from fastapi import Request
 
 @app.get("/mac-address")
-async def get_mac_address(request: Request):
-    # Try to retrieve the MAC address based on network setup; this might vary
+async def get_mac_address(req: Request):
+    if not isinstance(req, Request):
+        logging.error("Received a non-Request object.")
+        return {
+            "status": "error",
+            "message": "Invalid request object"
+        }
+
     try:
-        client_ip = request.client.host
-        logging.info("ttempting to retreive MAC fro IP: {client_ip}")
-        mac_address = get_mac_address(client_ip)
-    
-        if mac_address:
-            return {
-                "status": "success",
-                "mac_address": mac_address,
-                "client_ip": client_ip
-            }
+        print(f"Request type: {type(req)}")
+        client_ip = req.client.host
+        logging.info(f"Attempting to retrieve MAC for IP: {client_ip}")
+        
+        # if async is still waiting ...
+        if asyncio.iscoroutinefunction(get_mac_from_ip):
+            mac_address = await get_mac_from_ip(client_ip)
         else:
-            return {
-                "status": "error",
-                "message": "MAC address could not be retreived",
-                "client_ip": client_ip
-            }
+            mac_address = get_mac_from_ip(client_ip)
+        
+        # Check if MAC address was successfully retrieved; otherwise use fallback
+        if not mac_address:
+            mac_address = "00:00:00:00:00:00"  # Placeholder for unobtainable MAC
+        
+        return {
+            "status": "success" if mac_address else "error",
+            "mac_address": mac_address,
+            "client_ip": client_ip
+        }
     except Exception as e:
         logging.error(f"Error in MAC address endpoint: {e}")
         return {
             "status": "error",
-            "message": "An Unexpected error ocured",
-            "client_ip": client_ip
+            "message": "An unexpected error occurred",
+            "client_ip": client_ip if 'client_ip' in locals() else "unknown"
         }
-    
 
 ######################################
 
+# model for the registration request
+class RegisterRequest(BaseModel):
+    phone_number: str
+    mac_address: str
 
-# Routes
 @app.post("/register")
-async def register_user(phone_number: str, mac_address: str, db: Session = Depends(get_db)):
-    user = User(phone_number=phone_number, mac_address=mac_address)
-    db.add(user)
-    db.commit()
+async def register_user(request: RegisterRequest, db: Session = Depends(get_db)):
+    # Check if the user already exists
+    existing_user = db.query(User).filter(User.phone_number == request.phone_number).first()
+    if existing_user:
+        # Resend OTP for the existing user
+        otp_code = generate_otp()
+        print(f"TOP: {otp_code}")
+        store_otp(db, request.phone_number, otp_code)
+        send_otp_sms(request.phone_number, otp_code)
+        return {"message": "User already registered. New OTP sent for verification."}
     
-    # Generate and send OTP
-    otp_code = generate_otp()
-    print(f"OTP: {otp_code}")
-    store_otp(db, phone_number, otp_code)
-    send_otp_sms(phone_number, otp_code)
-    
-    return {"message": "Registration initiated"}
+    # If user does not exist, proceed to create a new entry
+    try:
+        user = User(phone_number=request.phone_number, mac_address=request.mac_address)
+        db.add(user)
+        db.commit()
+        
+        # Generate and send OTP for the new registration
+        otp_code = generate_otp()
+        print(f"TOP: {otp_code}")
+        store_otp(db, request.phone_number, otp_code)
+        send_otp_sms(request.phone_number, otp_code)
+        
+        return {"message": "Registration initiated. OTP sent for verification."}
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="User registration failed due to a database error.")
+
 
 
 #######################################
 
+class OtpRight (BaseModel):
+    phone_number: str
+    otp_code: str
+
 # Endpointto verify OTP
 @app.post("/verify-otp")
-async def verify_otp(phone_number: str, otp_code: str, db: Session = Depends(get_db)):
+async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
     #check is OTP is valid and not used
     otp = db.query(OTP).filter(
-        OTP.phone_number == phone_number,
-        OTP.otp_code == otp_code,
+        OTP.phone_number == re.phone_number,
+        OTP.otp_code == re.otp_code,
         OTP.is_used == False
     ).first()
     
@@ -106,7 +148,7 @@ async def verify_otp(phone_number: str, otp_code: str, db: Session = Depends(get
     db.commit()
     
     # Check if the user is registered
-    user = db.query(User).filter(User.phone_number == phone_number).first()
+    user = db.query(User).filter(User.phone_number == re.phone_number).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not registered")
     
@@ -119,7 +161,11 @@ async def verify_otp(phone_number: str, otp_code: str, db: Session = Depends(get
 
     #if there's an active subscription, Generate a token leading to the countdown to the end of their session.
     if active_subscription:
-        time_left = active_subscription.endtime - datetime.now(timezone.utc)
+        # Convert `end_time` to UTC if it is offset-naive
+        if active_subscription.end_time.tzinfo is None:
+            active_subscription.end_time = active_subscription.end_time.replace(tzinfo=timezone.utc)
+        
+        time_left = active_subscription.end_time - datetime.now(timezone.utc)
         
         session_data = {
             "sub": user.phone_number,
@@ -143,44 +189,76 @@ async def verify_otp(phone_number: str, otp_code: str, db: Session = Depends(get
         token = create_access_token(access_data)
         return {"token": token, "message": "No active subscription. Pleade select a plan"}
 
+
+
 #########################################################
+# Base for subscription request components
+class SubRequest (BaseModel):
+    user_id: int
+    plan_type: str
 
 # Endpoint for Subscription Creation
 @app.post("/subscribe")
-async def create_subscription(
-    user_id: int,
-    plan_type: str,
-    db: Session = Depends(get_db)
+async def create_subscription(request: SubRequest, db: Session = Depends(get_db)
 ):
     # Plan configurations
     plans = {
-        "1hr": {"amount": 10, "duration": timedelta(hours=1)},
+        "1hr": {"amount": 1, "duration": timedelta(hours=1)},
         "2hrs": {"amount": 25, "duration": timedelta(hours=2)},
-        "5hrs": {"amount": 65, "duration": timedelta(hours=5)},
-        "monthly": {"amount": 500, "duration": timedelta(days=30)}
+        "3hrs": {"amount": 35, "duration": timedelta(hours=3)},
+        "8hrs": {"amount": 80, "duration": timedelta(hours=8)},
+        "12hrs": {"amount": 100, "duration": timedelta(hours=12)},
+        "24hrs": {"amount": 150, "duration": timedelta(days=1)},
+        "3 days": {"amount": 300, "duration": timedelta(days=3)},
+        "1 week": {"amount": 550, "duration": timedelta(weeks=1)},
+        "2 weeks": {"amount": 1000, "duration": timedelta(weeks=2)},
+        "monthly": {"amount": 1750, "duration": timedelta(days=30)}
     }
     
-    if plan_type not in plans:
+    if request.plan_type not in plans:
         raise HTTPException(status_code=400, detail="Invalid plan type")
     
-    plan = plans[plan_type]
+    plan = plans[request.plan_type]
     subscription = Subscription(
-        user_id=user_id,
-        plan_type=plan_type,
+        user_id=request.user_id,
+        plan_type=request.plan_type,
         amount=plan["amount"],
         start_time=datetime.now(timezone.utc),
         end_time=datetime.now(timezone.utc) + plan["duration"]
     )
-    
+    print(f"Your subscription is \n {Subscription}")
     db.add(subscription)
     db.commit()
     
     # Initiate M-Pesa payment
-    response = initiate_mpesa_payment(subscription.id, plan["amount"], db)
+    response = await initiate_mpesa_payment(subscription.id, plan["amount"], db)
     
     return {"message": "Subscription initiated, payment pending", "mpesa_response": response}
 
-###############################
+##################################################
+
+#creating a subscription status checker
+@app.get("/subscription-status")
+async def subscription_status(user_id: int, db: Session = Depends(get_db)):
+    subscription = db.query(Subscription).filter(
+        Subscription.user_id == user_id,
+        Subscription.is_active == True
+    ).first()
+
+    # Calculate time left in seconds if there's an active subscription
+    if subscription:
+        # Ensure `end_time` is timezone-aware
+        if subscription.end_time.tzinfo is None:
+            subscription.end_time = subscription.end_time.replace(tzinfo=timezone.utc)
+        
+        time_left = (subscription.end_time - datetime.now(timezone.utc)).total_seconds()
+        return {"subscription_active": True, "time_left": max(time_left, 0)}
+    
+    # Return inactive status if no subscription found
+    return {"subscription_active": False, "time_left": 0}
+
+
+####################################################
 
 # RETURNING USERS #
 
@@ -226,10 +304,13 @@ def send_otp_sms(phone_number: str, otp_code: str):
 
 
 #Create an Access Token
-def create_access_token(phone_number: str):
-    to_encode = {"sub": phone_number}
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(minutes=30)  # Expiry as needed
+    to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, S_KEY, algorithm="HS256")
     return encoded_jwt
+
 
 
 #Initialize Mpesa Payment
@@ -246,11 +327,13 @@ def initiate_mpesa_payment(subscription_id: int, amount: float, db: Session):
     
     try:
         # STK PUSH INITIATE
+        print("Initiating Mpesa STK Push Now")
         response = mpesa_payment.initiate_stk_push(
             phone_number=phone_number,
             amount=amount,
             reference=str(subscription_id) # unique to match with callback
         )
+        logging.info(f"In the initiate_mpesa_payment call, this is the response: \n {response}")
         return response
     except Exception as e:
         print(f"Error initializing payment: {e}")
@@ -329,89 +412,6 @@ def get_mac_from_ip(ip_address):
 
 
 
-// File: Backend/captive/__pycache__/CaptivePortalAPI.cpython-312.pyc
-Ë
-    rI%gZ,  ã                   ó  — d dl Z d dlZd dlZd dlZd dlZd dlZd dlZd dlZd dlZd dl	Z	d dl
-mZmZmZ d dlmZ d dlmZ d dlmZ d dlmZmZmZ d dlmZ d dlmZ d d	lmZmZmZmZ d dl Z  e«       Z!e!jE                  ed
-gdd
-gd
-g¬«       dZ# e jH                  dd¬«       e jJ                  Z&d dl
-m'Z' e!jQ                  d«      de'fd„«       Z)e!jU                  d«       ee«      fde+de+defd„«       Z,e!jU                  d«       ee«      fde+de+defd„«       Z-e!jU                  d«       ee«      fde.de+defd „«       Z/e!jU                  d!«       ee«      fde+defd"„«       Z0d#„ Z1dede+de+fd$„Z2de+de+fd%„Z3de+fd&„Z4d'e.d(e5defd)„Z6d*„ Z7y)+é    N)ÚFastAPIÚHTTPExceptionÚDepends)ÚCORSMiddleware)Údeclarative_base)ÚSession)ÚdatetimeÚ	timedeltaÚtimezone)ÚMPESAPayment)ÚOptional)Úget_dbÚSubscriptionÚUserÚOTPÚ*T)Úallow_originsÚallow_credentialsÚallow_methodsÚallow_headersÚ@93f2d9b13fe90325b803bf2e8f9a66d205f3ff671990ac11423183d334d86691ÚsandboxÚMatsk_2c126971a075f8c3ed0dbab580d1e4cb7959577587717d23e5fca0b6387104f4e7079690)ÚusernameÚapi_key)ÚRequestz/mac-addressÚrequestc              ƒ   óü   K  — 	 | j                   j                  }t        j                  d«       t	        |«      }|rd||dœS dd|dœS # t
-        $ r(}t        j                  d|› «       dddœcY d }~S d }~ww xY w­w)	Nz-ttempting to retreive MAC fro IP: {client_ip}Úsuccess)ÚstatusÚmac_addressÚ	client_ipÚerrorz"MAC address could not be retreived)r    Úmessager"   zError in MAC address endpoint: zAn Unexpected error ocured)ÚclientÚhostÚloggingÚinfoÚget_mac_addressÚ	Exceptionr#   )r   r"   r!   Úes       úT/home/moon/Desktop/Safari Connect/Safari-Connect/Backend/captive/CaptivePortalAPI.pyr)   r)   (   s”   è ø€ ğ
-Ø—N‘N×'Ñ'ˆ	Ü‰ĞDÔEÜ% iÓ0ˆáà#Ø*Ø&ñğ ğ "Ø?Ø&ñğ øô
- ò 
-Ü‰Ğ7¸°sĞ;Ô<àØ3Ø"ñ
-õ 	
-ûğ
-üs@   ‚A<„=A ÁA<ÁA ÁA<Á	A9ÁA4Á.A9Á/A<Á4A9Á9A<z	/registerÚphone_numberr!   Údbc              ƒ   óĞ   K  — t        | |¬«      }|j                  |«       |j                  «        t        «       }t	        d|› «       t        || |«       t        | |«       ddiS ­w)N)r-   r!   zOTP: r$   zRegistration initiated)r   ÚaddÚcommitÚgenerate_otpÚprintÚ	store_otpÚsend_otp_sms)r-   r!   r.   ÚuserÚotp_codes        r,   Úregister_userr8   I   s`   è ø€ ä˜\°{ÔC€DØ‡FFˆ4„LØ‡II„Kô ‹~€HÜ	ˆE(Ğ
-ÔÜˆb, Ô)Ü˜xÔ(àĞ/Ğ0Ğ0ùs   ‚A$A&z/verify-otpr7   c              ƒ   ó0  K  — |j                  t        «      j                  t        j                  | k(  t        j                  |k(  t        j
-                  dk(  «      j                  «       }|st        dd¬«      ‚d|_        |j                  «        |j                  t        «      j                  t        j                  | k(  «      j                  «       }|st        dd¬«      ‚|j                  t        «      j                  t        j                  |j                  k(  t        j                  dk(  t        j                  t        j                   t"        j$                  «      kD  «      j                  «       }|ru|j&                  t        j                   t"        j$                  «      z
-  }|j                  dd|j)                  «       |j*                  |j                  d	œ}t-        |«      }|d
-dœS |j                  dd|j                  dœ}	t-        |	«      }|ddœS ­w)NFé  zInvalid OTP©Ústatus_codeÚdetailTé”  úUser not registeredzHey, you enjoing the Internet?)Úsubr$   Úsubscription_actveÚ	time_leftÚ	plan_typeÚuser_idz%Well, Your Session Is still active...)Útokenr$   zHello, Welcome back!)r@   r$   Úsubscription_activerD   z,No active subscription. Pleade select a plan)Úqueryr   Úfilterr-   r7   Úis_usedÚfirstr   r1   r   r   rD   ÚidÚ	is_activeÚend_timer	   Únowr   ÚutcÚendtimeÚtotal_secondsrC   Úcreate_access_token)
-r-   r7   r.   Úotpr6   Úactive_subscriptionrB   Úsession_datarE   Úaccess_datas
-             r,   Ú
-verify_otprW   [   s¼  è ø€ ğ (‰(”3‹-×
-Ñ
-Ü×Ñ˜LÑ(Ü‰˜Ñ Ü‰uÑó÷ eƒgğ	 ñ Ü¨°MÔBĞBğ €C„KØ‡II„Kğ 8‰8”D‹>× Ñ ¤×!2Ñ!2°lÑ!BÓC×IÑIÓK€DÙÜ¨Ğ4IÔJĞJğ Ÿ(™(¤<Ó0×7Ñ7Ü×Ñ §¡Ñ'Ü×Ñ $Ñ&Ü×Ñ¤§¡¬X¯\©\Ó :Ñ:ó÷ eƒgğ	 ñ Ø'×/Ñ/´(·,±,¼x¿|¹|Ó2LÑLˆ	ğ ×$Ñ$Ø7Ø"&Ø"×0Ñ0Ó2Ø,×6Ñ6Ø—g‘gñ
-ˆô $ LÓ1ˆØĞ+RÑSĞSğ
- ×$Ñ$Ø-Ø#(Ø—w‘wñ	
-ˆô $ KÓ0ˆØĞ+YÑZĞZùs   ‚HHz
-/subscriberD   rC   c           	   ƒ   óâ  K  — dt        d¬«      dœdt        d¬«      dœdt        d¬«      dœd	t        d
-¬«      dœdœ}||vrt        dd¬«      ‚||   }t        | ||d   t        j                  t
-        j                  «      t        j                  t
-        j                  «      |d   z   ¬«      }|j                  |«       |j                  «        t        |j                  |d   |«      }d|dœS ­w)Né
-   é   )Úhours)ÚamountÚdurationé   é   éA   é   éô  é   )Údays)Ú1hrÚ2hrsÚ5hrsÚmonthlyr:   zInvalid plan typer;   r\   r]   )rD   rC   r\   Ú
-start_timerM   z'Subscription initiated, payment pending)r$   Úmpesa_response)r
-   r   r   r	   rN   r   rO   r0   r1   Úinitiate_mpesa_paymentrK   )rD   rC   r.   ÚplansÚplanÚsubscriptionÚresponses          r,   Úcreate_subscriptionrp   ”   sá   è ø€ ğ ¬)¸!Ô*<Ñ=Ø¬9¸1Ô+=Ñ>Ø¬9¸1Ô+=Ñ>Ø!¬y¸bÔ/AÑBñ	€Eğ ˜ÑÜ¨Ğ4GÔHĞHàÑ€DÜØØØH‰~Ü—<‘<¤§¡Ó-Ü—‘œhŸl™lÓ+¨d°:Ñ.>Ñ>ô€Lğ ‡FFˆ<ÔØ‡II„Kô & l§o¡o°t¸H±~ÀrÓJ€Hà@ĞT\Ñ]Ğ]ùs   ‚C-C/z/loginc              ƒ   óü   K  — |j                  t        «      j                  t        j                  | k(  «      j	                  «       }|st        dd¬«      ‚t        «       }t        || |«       t        | |«       ddiS ­w)Nr>   r?   r;   r$   zOTP sent to your phone)	rG   r   rH   r-   rJ   r   r2   r4   r5   )r-   r.   r6   r7   s       r,   Ú
-login_userrr   º   sp   è ø€ ğ 8‰8”D‹>× Ñ ¤×!2Ñ!2°lÑ!BÓC×IÑIÓK€DÙÜ¨Ğ4IÔJĞJô ‹~€HÜˆb, Ô)Ü˜xÔ(ØĞ/Ğ0Ğ0ùs   ‚A:A<c                  óB   — dd l } t         | j                  dd«      «      S )Nr   i † i?B )ÚrandomÚstrÚrandint)rt   s    r,   r2   r2   Ì   s   € ãÜˆ~ˆv~‰~˜f fÓ-Ó.Ğ.ó    c                 ó¦   — t        ||dt        j                  t        j                  «      ¬«      }| j                  |«       | j                  «        y )NF)r-   r7   rI   Ú
-created_at)r   r	   rN   r   rO   r0   r1   )r.   r-   r7   rS   s       r,   r4   r4   Ó   s9   € Ü
-˜<°(ÀEÔV^×VbÑVbÔck×coÑcoÓVpÔ
-q€CØ‡FFˆ3„KØ‡II…Krw   c                 ó|   — d|› }	 t         j                  || g«      }|S # t        $ r}t        dd¬«      ‚d }~ww xY w)NzYour OTP code is: rb   zFailed to send SMSr;   )ÚsmsÚsendr*   r   )r-   r7   r$   ro   r+   s        r,   r5   r5   Ú   sK   € Ø" 8 *Ğ-€GğJÜ—8‘8˜G l ^Ó4ˆØˆøÜò JÜ¨Ğ4HÔIĞIûğJús   ‡   	;©6¶;c                 óF   — d| i}t        j                  |t        d¬«      }|S )Nr@   ÚHS256)Ú	algorithm)ÚjwtÚencodeÚS_KEY)r-   Ú	to_encodeÚencoded_jwts      r,   rR   rR   ä   s$   € Ø˜Ğ%€IÜ—*‘*˜Y¬¸ÔA€KØĞrw   Úsubscription_idr\   c                 ó  — |j                  t        «      j                  t        j                  | k(  «      j	                  «       }|j                  t
-        «      j                  t
-        j                  |j                  k(  «      j	                  «       }|st        dd¬«      ‚|j                  }t        «       }	 |j                  ||t        | «      ¬«      }|S # t        $ r }t        d|› «       t        dd¬«      ‚d }~ww xY w)Nr>   zuser not foundr;   )r-   r\   Ú	referencezError initializing payment: rb   z"M-Pesa payment initiaizaion failed)rG   r   rH   rK   rJ   r   rD   r   r-   r   Úinitiate_stk_pushru   r*   r3   )	r…   r\   r.   rn   r6   r-   Úmpesa_paymentro   r+   s	            r,   rk   rk   ë   sà   € à—8‘8œLÓ)×0Ñ0´·±ÀOÑ1SÓT×ZÑZÓ\€LØ8‰8”D‹>× Ñ ¤§¡¨L×,@Ñ,@Ñ!@ÓA×GÑGÓI€DáÜ¨Ğ4DÔEĞEà×$Ñ$€LÜ “N€Mğ
-Zà ×2Ñ2Ø%ØÜ˜/Ó*ğ 3ó 
-ˆğ
- ˆøÜò ZÜĞ,¨Q¨CĞ0Ô1Ü¨Ğ4XÔYĞYûğZús   Â7C Ã	C?ÃC:Ã:C?c           	      ó2  — 	 t        j                  «       j                  «       }|dk(  rŠ	 t        j                  dd| gddd¬«      }|j
-                  j                  d«      D ]N  }| |v sŒ|j                  «       d   j                  d	d
-«      }|sŒ.t        |j                  d
-«      «      dk(  sŒL|c S  n|dv rŒ	 t        j                  dd| gddd¬«      }|j
-                  j                  d«      D ]P  }| |v sŒ|j                  «       }t        |«      dkD  r|d   nd}|sŒ0t        |j                  d
-«      «      dk(  sŒN|c S  	 | dk(  s| dk(  rt        t        j                  «       «      S 	 t        j                   | «      d   }d
-j#                  t%        ddd«      D cg c]+  }dj'                  t        j                  «       |z	  dz  «      ‘Œ- c}ddd…   «      }|S # t        $ r"}t        j                  d|› «       Y d}~Œ¿d}~ww xY w# t        $ r"}t        j                  d|› «       Y d}~Œíd}~ww xY wc c}w # t        $ r"}t        j                  d|› «       Y d}~yd}~ww xY w# t        $ r"}t        j                  d|› «       Y d}~yd}~ww xY w)zà
-    Attempt to retrieve MAC address for a given IP address using multiple methods.
-    
-    Args:
-        ip_address (str): IP address to find MAC for
-    
-    Returns:
-        str: MAC address if found, None otherwise
-    ÚwindowsÚarpz-aTra   )Úcapture_outputÚtextÚtimeoutú
-éÿÿÿÿú-ú:é   zWindows ARP lookup failed: N)ÚlinuxÚdarwinz-nr_   zLinux/macOS ARP lookup failed: z	127.0.0.1z::1r   é   z{:02x}éÿ   zHostname MAC lookup failed: z%Unexpected error in get_mac_from_ip: )ÚplatformÚsystemÚlowerÚ
-subprocessÚrunÚstdoutÚsplitÚreplaceÚlenr*   r'   r#   ru   ÚuuidÚgetnodeÚsocketÚgethostbyaddrÚjoinÚrangeÚformat)	Ú
-ip_addressÚ	os_systemÚresultÚlineÚmacr+   ÚpartsÚhostnameÚelementss	            r,   Úget_mac_from_ipr±     s‚  € ğ:ä—O‘OÓ%×+Ñ+Ó-ˆ	à˜	Ò!ğAä#Ÿ™¨°°jĞ(AØ7;Ø-1Ø01ô3ğ
- #ŸM™M×/Ñ/°Ó5ò 'DØ! TÒ)à"Ÿj™j›l¨2Ñ.×6Ñ6°s¸CÓ@˜Ú¤3 s§y¡y°£~Ó#6¸!Ó#;Ø#&šJñ'ğ Ğ-Ñ-ğEä#Ÿ™¨°°jĞ(AØ7;Ø-1Ø01ô3ğ
- #ŸM™M×/Ñ/°Ó5ò 'DØ! TÒ)à $§
-¡
-£˜Ü*-¨e«*°qª.˜e Ašh¸d˜Ú¤3 s§y¡y°£~Ó#6¸!Ó#;Ø#&šJñ'ğ ˜Ò$¨
-°eÒ(;Ü”t—|‘|“~Ó&Ğ&ğ	>Ü×+Ñ+¨JÓ7¸Ñ:ˆHà—(‘(Ü,1°!°C¸«Nö<Ø (ğ %ŸO™O¬T¯\©\«^¸xÑ-GÈ4Ñ,OÕPò <Ù<@¸b¸DñBó CˆCàˆJøôA ò AÜ—‘Ğ ;¸A¸3Ğ?×@Ñ@ûğAûô$ ò EÜ—‘Ğ ?À¸sĞC×DÑDûğEüò<øô ò 	>ÜM‰MĞ8¸¸Ğ<×=Ğ=àûğ	>ûô
- ò Ü‰Ğ=¸a¸SĞAÔBÜûğúsĞ   ‚'I+ ª>G Á)%G ÂG Â-G Â1G Â2I+ Â8>H
- Ã7'H
- ÄH
- Ä=H
- ÅH
- Å'I+ Å+2H= Æ0H8ÇH= Ç	HÇ%HÇ=I+ ÈHÈI+ È
-	H5ÈH0È+I+ È0H5È5I+ È8H= È=	I(ÉI#ÉI+ É#I(É(I+ É+	JÉ4JÊJ)8rt   r¤   r™   r¢   r'   Úrequestsr€   rœ   ÚsysÚosÚfastapir   r   r   Úfastapi.middleware.corsr   Úsqlalchemy.ext.declarativer   Úsqlalchemy.ormr   r	   r
-   r   ÚBackend.Payment.FastAPIr   Útypingr   ÚBackend.database.dataBaser   r   r   r   ÚafricastalkingÚappÚadd_middlewarer‚   Ú
-initializeÚSMSr{   r   Úgetr)   Úpostru   r8   rW   Úintrp   rr   r2   r4   r5   rR   Úfloatrk   r±   © rw   r,   ú<module>rÆ      s  ğß R× R× R× R× R÷ 4Ñ 3İ 2İ 7İ "ß 2Ñ 2İ 0İ ß EÓ EÛ áƒi€à × Ñ ØØ%ØØ%Ø%ğ ô ğ 	K€ğ €× Ñ ØØ[õğ ×Ñ€õ à‡ˆÓğ
- 7ò 
-ó ğ
-ğ@ ‡ˆ+ÓÙKRĞSYË?ñ 1 cğ 1¸ğ 1Àò 1ó ğ1ğ" ‡ˆ-ÓÙELÈVÃ_ñ 3[ 3ğ 3[°#ğ 3[¸7ò 3[ó ğ3[ğp ‡ˆ,Óñ ˜&“/ñ^Øğ^àğ^ğ 	ò^ó ğ^ğJ ‡ˆ(ÓÙ6=¸f³oñ 
-1 3ğ 
-1¨Gò 
-1ó ğ
-1ò"/ğ'ğ ¨ğ ¸ó ğJ˜sğ J¨có Jğ có ğZ¨Cğ Z¸ğ ZÀGó Zó0Drw   
-
-
 // File: Backend/captive/SKey.py
 import secrets
 
@@ -468,7 +468,7 @@ class PaymentRecord(Base):
 # Database connection
 DATABASE_URL = "postgresql://safariconnect:1Amodung%40%21.@192.168.0.102:5432/captive_portal"
 engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoload=True, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, bind=engine)
 
 #Ensuring the tables are created only once
 inspector = inspect(engine)
@@ -486,50 +486,25 @@ def get_db():
         db.close()
 
 
-// File: Backend/database/__pycache__/dataBase.cpython-312.pyc
-Ë
-    9%gç  ã                   óv  — d dl mZmZmZmZmZmZmZmZ d dl	m
-Z
- d dlmZmZ d dlmZmZ  e
-«       Z G d„ de«      Z G d„ de«      Z G d	„ d
-e«      Z G d„ de«      ZdZ ee«      Z edde¬«      Z ee«      Zej3                  «       s, ed«       ej6                  j9                  e¬«        ed«       d„ Zy)é    )Úcreate_engineÚColumnÚIntegerÚStringÚFloatÚDateTimeÚBooleanÚinspect)Údeclarative_base)ÚsessionmakerÚSession)ÚdatetimeÚtimezonec                   ó¨   — e Zd ZdZ eedd¬«      Z eedd¬«      Z ee«      Z	 ee
- ej                  ej                  «      ¬«      Z eed¬«      Zy)ÚUserÚusersT©Úprimary_keyÚindex©Úuniquer   ©ÚdefaultN)Ú__name__Ú
-__module__Ú__qualname__Ú__tablename__r   r   Úidr   Úphone_numberÚmac_addressr   r   Únowr   ÚutcÚ
-created_atr	   Ú	is_active© ó    úM/home/moon/Desktop/Safari Connect/Safari-Connect/Backend/database/dataBase.pyr   r   	   sS   „ Ø€MÙ	 T°Ô	6€BÙ˜&¨°TÔ:€LÙ˜“.€KÙ˜¨,¨(¯,©,°x·|±|Ó*DÔE€JÙw¨Ô-Ir&   r   c                   óŠ   — e Zd ZdZ eedd¬«      Z ee«      Z ee«      Z	 ee
-«      Z ee«      Z ee«      Z eed¬«      Zy)ÚSubscriptionÚsubscriptionsTr   r   N)r   r   r   r   r   r   r   Úuser_idr   Ú	plan_typer   Úamountr   Ú
-start_timeÚend_timer	   r$   r%   r&   r'   r)   r)      sP   „ Ø#€MÙ	 T°Ô	6€BÙW‹o€GÙv“€IÙE‹]€FÙ˜Ó!€JÙhÓ€HÙw¨Ô-Ir&   r)   c                   ó¢   — e Zd ZdZ eedd¬«      Z ee«      Z ee«      Z	 ee
- ej                  ej                  «      ¬«      Z eed¬«      Zy)ÚOTPÚotpsTr   r   FN)r   r   r   r   r   r   r   r   r   Úotp_coder   r   r!   r   r"   r#   r	   Úis_usedr%   r&   r'   r1   r1      sN   „ Ø€MÙ	 T°Ô	6€BÙ˜&“>€LÙf‹~€HÙ˜¨,¨(¯,©,°x·|±|Ó*DÔE€JÙW eÔ,Gr&   r1   c                   ó¨   — e Zd ZdZ eedd¬«      Z eedd¬«      Z ee«      Z	 eed¬«      Z
- ee ej                  ej                  «      ¬«      Zy)ÚPaymentRecordÚpayment_recordsTr   r   ÚPendingr   N)r   r   r   r   r   r   r   r   Úcheckout_idÚsubscription_idÚstatusr   r   r!   r   r"   r#   r%   r&   r'   r6   r6   #   sS   „ Ø%€MÙ	 T°Ô	6€BÙ˜¨°DÔ9€KÙ˜W“o€OÙF IÔ.€FÙ˜¨,¨(¯,©,°x·|±|Ó*DÔEJr&   r6   zLpostgresql://safariconnect:1Amodung%40%21.@192.168.0.102:5432/captive_portalFT)Ú
-autocommitÚautoloadÚbindzSetting up database tables...)r>   zTables created.c               #   ót   K  — t        «       } 	 | –— | j                  «        y # | j                  «        w xY w­w)N)ÚSessionLocalÚclose)Údbs    r'   Úget_dbrC   9   s)   è ø€ Ü	‹€BğØŠà
-‰
-øˆ‰
-üs   ‚8# ’8£5µ8N)Ú
-sqlalchemyr   r   r   r   r   r   r	   r
-   Úsqlalchemy.ext.declarativer   Úsqlalchemy.ormr   r   r   r   ÚBaser   r)   r1   r6   ÚDATABASE_URLÚenginer@   Ú	inspectorÚget_table_namesÚprintÚmetadataÚ
-create_allrC   r%   r&   r'   ú<module>rO      s´   ğß `× `Ó `İ 7ß 0ß 'áÓ€ô.ˆ4ô .ô.4ô .ô-ˆ$ô -ôFDô Fğ ^€Ù	|Ó	$€Ù u°tÀ&ÔI€ñ F‹O€	Ø× Ñ Ô"Ù	Ğ
-)Ô*Ø‡MM×Ñ &ĞÔ)Ù	Ğ
-Ôór&   
-
-
-// File: Backend/Payment/FastAPI.py
+// File: Backend/Payment/payment.py
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from Backend.database.dataBase import get_db, PaymentRecord, Subscription
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-import requests
-import base64
+import requests, logging
+import base64, time
 from datetime import datetime, timedelta
 import json
 
 app = FastAPI()
 
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Adjust as per your needs
+    CORSMiddleware,  # This is the middleware_class argument
+    allow_origins=["https://8d71-41-209-3-162.ngrok-free.app"],  # Add your frontend URL in production
     allow_credentials=True,
-    allow_methods=["*"],  # This allows all HTTP methods
-    allow_headers=["*"],  # This allows all headers
+    allow_methods= ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"]
 )
 
 class MPESACredentials:
@@ -537,7 +512,7 @@ class MPESACredentials:
     CONSUMER_SECRET = "CrKa9Fu9hB65bpNKSF03ZWqCR8QdrHhvGZFjVRSRVM2Jb7ynfx7ctTtJUY0KEhKG"
     PASSKEY = "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"
     BUSINESS_SHORT_CODE = "174379"  # Usually your Paybill number
-    CALLBACK_URL = "https://1b61-41-209-3-162.ngrok-free.app"
+    CALLBACK_URL = "https://8d71-41-209-3-162.ngrok-free.app"
 
 
 class MPESAPayment:
@@ -576,12 +551,20 @@ class MPESAPayment:
         
     async def initiate_stk_push(self, phone_number: str, amount: float, reference: str):
         """Initiate STK push to customer's phone"""
+        
+        #phone number formating for safaricom API
+        if phone_number.startswith("+"):
+            phone_number = phone_number[1:]  # Remove leading '+'
+        elif phone_number.startswith("0"):
+            phone_number = f"254{phone_number[1:]}"  # Convert '0' to '254'
+
+        
         access_token = await self.get_access_token()
         password, timestamp = self.generate_password()
         
         headers = {
-            "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
+            "Authorization": f"Bearer {access_token}",
         }
         
         payload = {
@@ -595,19 +578,29 @@ class MPESAPayment:
             "PhoneNumber": phone_number,
             "CallBackURL": MPESACredentials.CALLBACK_URL,
             "AccountReference": reference,
-            "TransactionDesc": f"WiFi Subscription {reference}"
+            "TransactionDesc": f"Payment of WiFi Subscription {reference}"
         }
         
-        response = requests.post(
-            "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
-            json=payload,
-            headers=headers
-        )
+        logging.info(f"Payload sent to M-Pesa: {json.dumps(payload, indent=4)}")
         
-        if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to initiate payment")
+        try:
+            response = requests.post(
+            "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
+            headers=headers,
+            json=payload
+            )
+        
+            if response.status_code != 200:
+                logging.error(f"M-Pesa API Error: {response.status_code} - {response.text}")
+                raise HTTPException(status_code=400, detail="Failed to initiate payment")
             
-        return response.json()
+            # Log the successful response
+            logging.info(f"M-Pesa Response: {response.json()}")
+            return response.json()
+
+        except Exception as e:
+            logging.error(f"Error initializing M-Pesa payment: {e}")
+            raise HTTPException(status_code=500, detail="M-Pesa payment initialization failed")
 
 
 # FastAPI routes for M-Pesa integration
@@ -643,19 +636,38 @@ async def mpesa_callback(payment_data: dict, db: Session = Depends(get_db)):
         # Extract payment details from callback
         result = payment_data['Body']['stkCallback']
         checkout_id = result['CheckoutRequestID']
+        result_code = result['ResultCode']
+        result_desc = result['ResultDesc']
         
-        if result['ResultCode'] == 0:
+        if result_code == 0:
             # Payment successful
             # Now to Update subscription status
-            await activate_subscription(checkout_id, db)
+            await retry_callback_activation(checkout_id, db)
+            logging.info("Payment Processed successfully")
             return {"message": "Payment processed successfully"}
         else:
             # Payment failed
             await mark_payment_failed(checkout_id, db)
-            return {"message": "Payment failed"}
+            logging.info(f"Payment failed: {result_desc}")
+            return {"message": f"Payment failed: {result_desc}"}
             
     except Exception as e:
+        logging.error(f"Error handling M-Pesa callback: {e}")
         raise HTTPException(status_code=400, detail="Invalid callback data")
+
+
+
+# handle retries if callback fails.
+async def retry_callback_activation(checkout_id: str, db: Session, retries=100, delay=2):
+    for attempt in range(retries):
+        try:
+            await activate_subscription(checkout_id, db)
+            print("Subscription activated after callback.")
+            return
+        except Exception as e:
+            logging.error(f"Retry {attempt+1} failed: {e}")
+            time.sleep(delay)
+    logging.error(f"Failed to activate subscription after {retries} retries.")
 
 
 
@@ -663,13 +675,19 @@ async def mpesa_callback(payment_data: dict, db: Session = Depends(get_db)):
 async def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
     """When initiating an M-Pesa transaction, you will receive a CheckoutRequestID that serves as a unique identifier.
     Store this ID and subscription_id in the database to verify payment status later."""
-    payment_record = PaymentRecord(
-        checkout_id=checkout_id,
-        subscription_id=subscription_id,
-        status="Pending" # initial status
-    )
-    db.add(payment_record)
-    db.commit()
+    
+    try:
+        payment_record = PaymentRecord(
+            checkout_id=checkout_id,
+            subscription_id=subscription_id,
+            status="Pending"  # Initial status
+        )
+        db.add(payment_record)
+        await db.commit()  # Ensure async commit
+    except Exception as e:
+        logging.error(f"Failed to store checkout request: {e}")
+        raise HTTPException(status_code=500, detail="Failed to store payment record.")
+
 
 
 
@@ -683,7 +701,7 @@ async def activate_subscription(checkout_id: str, db: Session):
         subscription = db.query(Subscription).filter(Subscription.id == payment_record.subscription_id).first()
         if subscription:
             subscription.is_active = True
-            db.commit()
+            await db.commit()
             print("Subscription activated")
 
 
@@ -702,42 +720,6 @@ async def mark_payment_failed(checkout_id: str, db: Session):
             print("Payment failed, subscription inactive")
 
 
-// File: Backend/Payment/__pycache__/FastAPI.cpython-312.pyc
-Ë
-    öA%gb  ã            	       ó   — d dl mZmZmZmZ d dlmZ d dlmZm	Z	m
-Z
- d dlmZ d dlmZ d dlZd dlZd dlmZmZ d dlZ e«       Zej+                  edgd	dgdg¬
-«        G d„ d«      Z G d„ d«      Zej1                  d«      dedededefd„«       Zej1                  d«       ee«      fdedefd„«       Zdededefd„Zdedefd„Z dedefd„Z!y)é    )ÚFastAPIÚHTTPExceptionÚBackgroundTasksÚDepends)ÚCORSMiddleware)Úget_dbÚPaymentRecordÚSubscription)Ú	BaseModel)ÚSessionN)ÚdatetimeÚ	timedeltaÚ*T)Úallow_originsÚallow_credentialsÚallow_methodsÚallow_headersc                   ó    — e Zd ZdZdZdZdZdZy)ÚMPESACredentialsÚ0O7VPs1yZAADxdI4nszyxI4lAN8IXCX2Glf0gRcNm5SgG5b48Ú@CrKa9Fu9hB65bpNKSF03ZWqCR8QdrHhvGZFjVRSRVM2Jb7ynfx7ctTtJUY0KEhKGÚ@bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919Ú174379z(https://1b61-41-209-3-162.ngrok-free.appN)Ú__name__Ú
-__module__Ú__qualname__ÚCONSUMER_KEYÚCONSUMER_SECRETÚPASSKEYÚBUSINESS_SHORT_CODEÚCALLBACK_URL© ó    úK/home/moon/Desktop/Safari Connect/Safari-Connect/Backend/Payment/FastAPI.pyr   r      s   „ ØE€LØX€OØP€GØ"ĞØ=Lr#   r   c                   ó2   — e Zd Zd„ Zd„ Zd„ Zdededefd„Zy)	ÚMPESAPaymentc                 ó    — d | _         d | _        y )N)Úaccess_tokenÚaccess_token_expiry)Úselfs    r$   Ú__init__zMPESAPayment.__init__   s   € Ø ˆÔØ#'ˆÕ r#   c                 óø   — t        j                  «       j                  d«      }t        j                  › t        j
-                  › |› }t        j                  |j                  «       «      j                  d«      |fS )z7Generate the M-Pesa password using the provided passkeyz%Y%m%d%H%M%Súutf-8)
-r   ÚnowÚstrftimer   r    r   Úbase64Ú	b64encodeÚencodeÚdecode)r*   Ú	timestampÚdata_to_encodes      r$   Úgenerate_passwordzMPESAPayment.generate_password"   se   € ä—L‘L“N×+Ñ+¨NÓ;ˆ	Ü,×@Ñ@ĞAÔBR×BZÑBZĞA[Ğ\eĞ[fĞgˆÜ×Ñ × 5Ñ 5Ó 7Ó8×?Ñ?ÀÓHÈ)ĞSĞSr#   c              ƒ   ó*  K  — | j                   r-t        j                  «       | j                  k  r| j                   S t	        j
-                  t        j                  › dt        j                  › j                  «       «      j                  d«      }t        j                  ddd|› i¬«      }|j                  dk7  rt        dd	¬
-«      ‚|j                  «       }|d   | _         t        j                  «       t!        d¬«      z   | _        | j                   S ­w)z6Get the access token required to make M-Pesa API callsú:r-   zOhttps://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentialsÚAuthorizationzBasic )ÚheaderséÈ   é  zFailed to get access token©Ústatus_codeÚdetailr(   i  )Úseconds)r(   r   r.   r)   r0   r1   r   r   r   r2   r3   ÚrequestsÚgetr>   r   Újsonr   )r*   ÚcredentialsÚresponseÚresults       r$   Úget_access_tokenzMPESAPayment.get_access_token(   sì   è ø€ à×Ò¤§¡£°$×2JÑ2JÒ!JØ×$Ñ$Ğ$ä×&Ñ&Ü×,Ñ,Ğ-¨QÔ/?×/OÑ/OĞ.PĞQ×XÑXÓZó
-ç
-‰&‹/ğ 	ô —<‘<Ø]Ø$¨¨{¨mĞ&<Ğ=ô
-ˆğ
- ×Ñ 3Ò&Ü¨CĞ8TÔUĞUà—‘“ˆØ" >Ñ2ˆÔä#+§<¡<£>´IÀdÔ4KÑ#KˆÔ Ø× Ñ Ğ ùs   ‚DDÚphone_numberÚamountÚ	referencec              ƒ   ó„  K  — | j                  «       ƒ d{  –—† }| j                  «       \  }}d|› ddœ}t        j                  ||dt	        |«      |t        j                  |t        j
-                  |d|› dœ}t        j                  d||¬	«      }	|	j                  d
-k7  rt        dd¬«      ‚|	j                  «       S 7 Œ§­w)z%Initiate STK push to customer's phoneNzBearer zapplication/json)r9   zContent-TypeÚCustomerPayBillOnlinezWiFi Subscription )ÚBusinessShortCodeÚPasswordÚ	TimestampÚTransactionTypeÚAmountÚPartyAÚPartyBÚPhoneNumberÚCallBackURLÚAccountReferenceÚTransactionDescz?https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest)rC   r:   r;   r<   zFailed to initiate paymentr=   )rG   r6   r   r    Úintr!   rA   Úpostr>   r   rC   )
-r*   rH   rI   rJ   r(   Úpasswordr4   r:   ÚpayloadrE   s
-             r$   Úinitiate_stk_pushzMPESAPayment.initiate_stk_push?   sÏ   è ø€ à!×2Ñ2Ó4×4ˆØ"×4Ñ4Ó6Ñˆ)ğ  ' | nĞ5Ø.ñ
-ˆô "2×!EÑ!EØ Ø"Ø6Ü˜&“kØ"Ü&×:Ñ:Ø'Ü+×8Ñ8Ø )Ø!3°I°;Ğ?ñ
-ˆô —=‘=ØMØØô
-ˆğ ×Ñ 3Ò&Ü¨CĞ8TÔUĞUà}‰}‹Ğğ? 5ús   ‚C –B>—B(C N)	r   r   r   r+   r6   rG   ÚstrÚfloatr\   r"   r#   r$   r&   r&      s-   „ ò(òTò!ğ.!°Cğ !Àğ !ĞSVô !r#   r&   z/mpesa/initiaterH   rI   Úsubscription_idÚbackground_tasksc              ƒ   ó²   K  — t        «       }|j                  | |t        |«      ¬«      ƒ d {  –—† }|j                  t        |d   |¬«       d|d   dœS 7 Œ'­w)N)rH   rI   rJ   ÚCheckoutRequestID)Úcheckout_idr_   zPayment initiated)Úmessagerc   )r&   r\   r]   Úadd_taskÚstore_checkout_request)rH   rI   r_   r`   ÚmpesarF   s         r$   Úinitiate_paymentrh   d   ss   è ø€ ô ‹N€EØ×*Ñ*Ø!ØÜoÓ&ğ +ó ÷ €Fğ ×ÑÜØĞ.Ñ/Ø'ğ ô ğ +¸6ĞBUÑ;VÑWĞWğús   ‚+A­A®(Az/mpesa/callbackÚpayment_dataÚdbc              ƒ   óÚ   K  — 	 | d   d   }|d   }|d   dk(  rt        ||«      ƒ d{  –—†  ddiS t        ||«      ƒ d{  –—†  dd	iS 7 Œ 7 Œ
-# t        $ r}t        d
-d¬«      ‚d}~ww xY w­w)zHandle M-Pesa callbackÚBodyÚstkCallbackrb   Ú
-ResultCoder   Nrd   zPayment processed successfullyzPayment failedr<   zInvalid callback datar=   )Úactivate_subscriptionÚmark_payment_failedÚ	Exceptionr   )ri   rj   rF   rc   Úes        r$   Úmpesa_callbackrs   }   s›   è ø€ ğMà˜fÑ% mÑ4ˆØĞ0Ñ1ˆà,Ñ 1Ò$ô (¨°RÓ8×8Ğ8ØĞ?Ğ@Ğ@ô & k°2Ó6×6Ğ6ØĞ/Ğ0Ğ0ğ 9øğ 7ùô ò MÜ¨Ğ4KÔLĞLûğMüsT   ‚A+„$A ¨A	©A °A+±A Á AÁA ÁA+Á	A ÁA Á	A(ÁA#Á#A(Á(A+rc   c              ƒ   ój   K  — t        | |d¬«      }|j                  |«       |j                  «        y­w)zÅWhen initiating an M-Pesa transaction, you will receive a CheckoutRequestID that serves as a unique identifier.
-    Store this ID and subscription_id in the database to verify payment status later.ÚPending)rc   r_   ÚstatusN)r	   ÚaddÚcommit)rc   r_   rj   Úpayment_records       r$   rf   rf   •   s2   è ø€ ô #ØØ'Øô€Nğ
- ‡FFˆ>ÔØ‡II…Kùs   ‚13c              ƒ   ó|  K  — |j                  t        «      j                  t        j                  | k(  «      j	                  «       }|rs|j                  t
-        «      j                  t
-        j                  |j                  k(  «      j	                  «       }|r#d|_        |j                  «        t        d«       yyy­w)z.Activate subscription after successful paymentTzSubscription activatedN©Úqueryr	   Úfilterrc   Úfirstr
-   Úidr_   Ú	is_activerx   Úprint©rc   rj   ry   Úsubscriptions       r$   ro   ro   ¢   s‘   è ø€ ğ —X‘XœmÓ,×3Ñ3´M×4MÑ4MĞQ\Ñ4\Ó]×cÑcÓe€Náà—x‘x¤Ó-×4Ñ4´\·_±_È×HfÑHfÑ5fÓg×mÑmÓoˆÙØ%)ˆLÔ"ØI‰IŒKÜĞ*Õ+ğ ğ ùó   ‚B:B<c              ƒ   ó|  K  — |j                  t        «      j                  t        j                  | k(  «      j	                  «       }|rs|j                  t
-        «      j                  t
-        j                  |j                  k(  «      j	                  «       }|r#d|_        |j                  «        t        d«       yyy­w)z[This function will mark the subscription as inactive or pending in case of payment failure.Fz%Payment failed, subscription inactiveNr{   r‚   s       r$   rp   rp   ±   s‘   è ø€ ğ —X‘XœmÓ,×3Ñ3´M×4MÑ4MĞQ\Ñ4\Ó]×cÑcÓe€Náà—x‘x¤Ó-×4Ñ4´\·_±_È×HfÑHfÑ5fÓg×mÑmÓoˆÙØ%*ˆLÔ"ØI‰IŒKÜĞ9Õ:ğ ğ ùr„   )"Úfastapir   r   r   r   Úfastapi.middleware.corsr   ÚBackend.database.dataBaser   r	   r
-   Úpydanticr   Úsqlalchemy.ormr   rA   r0   r   r   rC   ÚappÚadd_middlewarer   r&   rY   r]   r^   rX   rh   Údictrs   rf   ro   rp   r"   r#   r$   ú<module>r      s+  ğß DÓ Dİ 2ß IÑ Iİ İ "Û Û ß (Û áƒi€à × Ñ ØØ%ØØ%Ø%ğ ô ÷>ñ >÷Cñ CğN ‡Ğ
-ÓğXØğXàğXğ ğXğ &ò	Xó ğXğ0 ‡Ğ
-ÓÙ;BÀ6»?ñ M tğ M°ò Mó ğMğ.	¨cğ 	ÀCğ 	ÈWó 	ğ,¨Sğ ,°gó ,ğ;¨3ğ ;°Gô ;r#   
-
 
 // File: index.html
 <!DOCTYPE html>
@@ -747,9 +729,9 @@ ResultCoder   Nrd   zPayment processed successfullyzPayment failedr<   zInva
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Safari Connect</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.2/axios.min.js"></script>
     <link rel="stylesheet" href="style.css">
     <link rel="shortcut icon" href="./resources/safari-icon2.svg" type="image/x-icon">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.2/axios.min.js"></script>
 </head>
 
 <body>
@@ -809,21 +791,21 @@ ResultCoder   Nrd   zPayment processed successfullyzPayment failedr<   zInva
                         <h3>24 Hours</h3>
                         <p>KSh 150</p>
                     </div>
-                    <div class="plan-card" onclick="selectPlan('72hrs')">
+                    <div class="plan-card" onclick="selectPlan('3 days')">
                         <h3> 3 Days</h3>
-                        <p>KSh 250</p>
+                        <p>KSh 300</p>
                     </div>
-                    <div class="plan-card" onclick="selectPlan('168hrs')">
+                    <div class="plan-card" onclick="selectPlan('1 week')">
                         <h3>1 Week</h3>
-                        <p>KSh 350</p>
+                        <p>KSh 550</p>
                     </div>
-                    <div class="plan-card" onclick="selectPlan('336hrs')">
+                    <div class="plan-card" onclick="selectPlan('2 weeks')">
                         <h3>2 Weeks</h3>
-                        <p>KSh 1050</p>
+                        <p>KSh 1000</p>
                     </div>
                     <div class="plan-card" onclick="selectPlan('monthly')">
                         <h3>Monthly</h3>
-                        <p>KSh 2000</p>
+                        <p>KSh 1750</p>
                     </div>
                 </div>
                 <button onclick="subscribe()" class="hidden" id="subscribeBtn">Subscribe</button>
@@ -837,9 +819,10 @@ ResultCoder   Nrd   zPayment processed successfullyzPayment failedr<   zInva
 
 
 // File: index.js
-const API_BASE_URL = 'http://192.169.0.102:8000';
+const API_BASE_URL = 'https://8d71-41-209-3-162.ngrok-free.app'//'http://192.168.0.102:8000' //'https://489c-41-209-3-162.ngrok-free.app';
 let selectedPlan = null;
 let currentUser = null;
+let paymentStatusInterval = null;
 
 async function getMacAddress() {
     try {
@@ -853,14 +836,20 @@ async function getMacAddress() {
 
 async function register() {
     const phone = document.getElementById('phone').value;
+    const macAddress = await getMacAddress();
+    console.log({
+        phone_number: phone,
+        mac_address: macAddress
+    });
     try {
         const response = await axios.post(`${API_BASE_URL}/register`, {
             phone_number: phone,
-            mac_address: await getMacAddress()
+            mac_address: macAddress
         });
         document.getElementById('registerForm').classList.add('hidden');
         document.getElementById('otpForm').classList.remove('hidden');
     } catch (error) {
+        console.error("Registration failed:", error);
         showError('Registration failed. Please try again.');
     }
 }
@@ -873,7 +862,7 @@ async function verifyOTP() {
             phone_number: phone,
             otp_code: otp
         });
-        
+
         const token = response.data.token;
         const decodedToken = parseJwt(token);
 
@@ -886,7 +875,8 @@ async function verifyOTP() {
             document.getElementById('plansForm').classList.remove('hidden');
         }
 
-        currentUser = token;
+        currentUser = decodedToken;
+        console.log(currentUser);
     } catch (error) {
         showError('Invalid OTP. Please try again.');
     }
@@ -894,20 +884,63 @@ async function verifyOTP() {
 
 
 async function subscribe() {
-    if (!selectedPlan || !currentUser) return;
+    // Ensuring selected plan and current user details are available
+    if (!selectedPlan) {
+        showError("Please select a subscription plan.");
+        return;
+    }
+    
+    if (!currentUser || !currentUser.user_id) {
+        showError("User information is missing. Please try re-verifying your OTP.");
+        return;
+    }
+
     try {
-        const response = await axios.post(`${API_BASE_URL}/subscribe`, {
-            plan_type: selectedPlan
-        }, {
-            headers: { Authorization: `Bearer ${currentUser}` }
-        });
-        // Handle M-Pesa payment initiation
-        showSuccess('Subscription initiated. Please complete payment on your phone.');
+        // request data
+        const requestData = {
+            user_id: currentUser.user_id,  // Ensure user_id is correct
+            plan_type: selectedPlan        // Ensure plan_type is set to selected plan
+        };
+        console.log("Subscription request data:", requestData); // For debugging
+
+        // Send request to backend
+        const response = await axios.post(`${API_BASE_URL}/subscribe`, requestData);
+
+        startPaymentStatusPolling();
+        
+        // Handle response after successful subscription initiation
+        if (response.data && response.data.message) {
+            showSuccess(response.data.message);
+        } else {
+            showSuccess("Subscription initiated. Please complete payment on your phone.");
+        }
     } catch (error) {
-        showError('Subscription failed. Please try again.');
+        console.error("Subscription error:", error.response ? error.response.data : error.message);
+        showError("Subscription failed. Please try again.");
     }
 }
 
+async function checkPaymentStatus() {
+    try {
+        const response = await axios.get(`${API_BASE_URL}/subscription-status`, {
+            params: { user_id: currentUser.user_id }
+        });
+        
+        if (response.data.subscription_active) {
+            showSuccess("Payment successful. Subscription activated!");
+            clearInterval(paymentStatusInterval);
+            // Update UI to reflect active session
+            // Start countdown with time_left from the server
+            showSessionCountdown(response.data.time_left);
+        } else {
+            console.log("Payment still processing...");
+        }
+    } catch (error) {
+        console.error("Error checking payment status:", error);
+    }
+}
+
+// functions //
 
 function selectPlan(plan) {
     selectedPlan = plan;
@@ -937,10 +970,10 @@ function showSuccess(message) {
 function parseJwt(token) {
     const base64Url = token.split('.')[1];
     const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+    const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
         return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
     }).join(''));
-
+    
     return JSON.parse(jsonPayload);
 }
 
@@ -949,27 +982,33 @@ function showSessionCountdown(timeLeft) {
     countdownContainer.className = 'countdown-container';
     document.querySelector('.card').innerHTML = ''; // Clear previous content
     document.querySelector('.card').appendChild(countdownContainer);
-
+    
     function updateCountdown() {
         if (timeLeft <= 0) {
             clearInterval(countdownInterval);
             countdownContainer.textContent = 'Session expired. Please select a plan.';
             document.getElementById('plansForm').classList.remove('hidden');
+            checkPaymentStatus();
             return;
         }
-
+        
         const hours = Math.floor(timeLeft / 3600);
         const minutes = Math.floor((timeLeft % 3600) / 60);
         const seconds = Math.floor(timeLeft % 60);
-
+        
         countdownContainer.textContent = `Session time left \n ${hours}h ${minutes}m ${seconds}s`;
         timeLeft--;
     }
-
+    
     const countdownInterval = setInterval(updateCountdown, 1000);
     updateCountdown();
 }
 
+// Start polling every 5 seconds after initiating payment
+function startPaymentStatusPolling() {
+    if (paymentStatusInterval) clearInterval(paymentStatusInterval);
+    paymentStatusInterval = setInterval(checkPaymentStatus, 5000);
+}
 
 
 // File: OpenTWRP/dhcp

@@ -58,6 +58,12 @@ if not inspector.get_table_names():  # Check if tables already exist
     Base.metadata.create_all(bind=engine)
     print("Tables created.")
 
+try:
+    connection = engine.connect()
+    print("DataBase Exists and Is connected successfully")
+except Exception as e:
+    print(f"Database connectio failed: {e}")
+
 # Dependencies
 def get_db():
     db = SessionLocal()

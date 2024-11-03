@@ -1,4 +1,4 @@
-const API_BASE_URL = 'https://8d71-41-209-3-162.ngrok-free.app'//'http://192.168.0.102:8000' //'https://489c-41-209-3-162.ngrok-free.app';
+const API_BASE_URL = 'https://f7a4-41-209-3-162.ngrok-free.app';
 let selectedPlan = null;
 let currentUser = null;
 let paymentStatusInterval = null;

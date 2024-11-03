@@ -7,13 +7,17 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta, timezone
+from Backend.Payment.payment import app as payment_app
 from Backend.Payment.payment import MPESAPayment
-from typing import Optional
 from Backend.database.dataBase import get_db, Subscription, User, OTP
+from typing import Optional
 from pydantic import BaseModel
 import africastalking
 
 app = FastAPI()
+
+app.mount("/payment", payment_app)
+logging.info("Payment app mounted at /payment")
 
 app.add_middleware(
     CORSMiddleware,
@@ -461,8 +465,13 @@ class PaymentRecord(Base):
     id = Column(Integer, primary_key=True, index=True)
     checkout_id = Column(String, unique=True, index=True)  # The M-Pesa transaction ID
     subscription_id = Column(Integer)  # Links to the Subscription table
-    status = Column(String, default="Pending")  # Payment status: "Pending", "Successful", or "Failed"
+    status = Column(String, default="Pending")  # Payment status
+    amount = Column(Float, nullable=True)
+    mpesa_receipt_number = Column(String, nullable=True)
+    transaction_date = Column(DateTime, nullable=True)
+    phone_number = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.now(timezone.utc))
+
 
 
 # Database connection
@@ -487,11 +496,12 @@ def get_db():
 
 
 // File: Backend/Payment/payment.py
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from Backend.database.dataBase import get_db, PaymentRecord, Subscription
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 import requests, logging
 import base64, time
 from datetime import datetime, timedelta
@@ -501,7 +511,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,  # This is the middleware_class argument
-    allow_origins=["https://8d71-41-209-3-162.ngrok-free.app"],  # Add your frontend URL in production
+    allow_origins=["*"],  # Add your frontend URL in production
     allow_credentials=True,
     allow_methods= ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"]
@@ -512,7 +522,7 @@ class MPESACredentials:
     CONSUMER_SECRET = "CrKa9Fu9hB65bpNKSF03ZWqCR8QdrHhvGZFjVRSRVM2Jb7ynfx7ctTtJUY0KEhKG"
     PASSKEY = "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"
     BUSINESS_SHORT_CODE = "174379"  # Usually your Paybill number
-    CALLBACK_URL = "https://8d71-41-209-3-162.ngrok-free.app"
+    CALLBACK_URL = "https://f7a4-41-209-3-162.ngrok-free.app/payment/mpesa/callback"
 
 
 class MPESAPayment:
@@ -577,8 +587,8 @@ class MPESAPayment:
             "PartyB": MPESACredentials.BUSINESS_SHORT_CODE,
             "PhoneNumber": phone_number,
             "CallBackURL": MPESACredentials.CALLBACK_URL,
-            "AccountReference": reference,
-            "TransactionDesc": f"Payment of WiFi Subscription {reference}"
+            "AccountReference": f"Safari Connect. Session_ID: {reference}",
+            "TransactionDesc": f"Payment for internet Subscription"
         }
         
         logging.info(f"Payload sent to M-Pesa: {json.dumps(payload, indent=4)}")
@@ -630,31 +640,95 @@ async def initiate_payment(
 
 
 @app.post("/mpesa/callback")
-async def mpesa_callback(payment_data: dict, db: Session = Depends(get_db)):
-    """Handle M-Pesa callback"""
-    try:
-        # Extract payment details from callback
-        result = payment_data['Body']['stkCallback']
-        checkout_id = result['CheckoutRequestID']
-        result_code = result['ResultCode']
-        result_desc = result['ResultDesc']
-        
-        if result_code == 0:
-            # Payment successful
-            # Now to Update subscription status
-            await retry_callback_activation(checkout_id, db)
-            logging.info("Payment Processed successfully")
-            return {"message": "Payment processed successfully"}
-        else:
-            # Payment failed
-            await mark_payment_failed(checkout_id, db)
-            logging.info(f"Payment failed: {result_desc}")
-            return {"message": f"Payment failed: {result_desc}"}
-            
-    except Exception as e:
-        logging.error(f"Error handling M-Pesa callback: {e}")
-        raise HTTPException(status_code=400, detail="Invalid callback data")
+async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
+    logging.info("M-Pesa callback route hit")
+    logging.info("Received M-Pesa callback request.")
 
+    try:
+        # Parse JSON payload
+        stk_callback_response = await request.json()
+        logging.info(f"Parsed JSON payload: {stk_callback_response}")
+
+        result = stk_callback_response.get('Body', {}).get('stkCallback', {})
+
+        # Extract relevant fields from callback
+        checkout_id = result.get('CheckoutRequestID')
+        result_code = result.get('ResultCode')
+        result_desc = result.get('ResultDesc')
+        
+        logging.info(f"Extracted Callback Details - CheckoutID: {checkout_id}, ResultCode: {result_code}, ResultDesc: {result_desc}")
+
+        # Check if the ResultCode indicates success
+        if result_code == 0:
+            logging.info("Payment is successful. Extracting metadata...")
+            
+            # Extract metadata items and ensure all fields are available
+            metadata = {item['Name']: item.get('Value') for item in result.get('CallbackMetadata', {}).get('Item', [])}
+            amount = metadata.get("Amount")
+            receipt_number = metadata.get("MpesaReceiptNumber")
+            transaction_date_str = metadata.get("TransactionDate")
+            phone_number = metadata.get("PhoneNumber")
+
+            # Log extracted metadata
+            print(f"Extracted Metadata - Amount: {amount}, ReceiptNumber: {receipt_number}, TransactionDate: {transaction_date_str}, PhoneNumber: {phone_number}")
+
+            # Validate extracted metadata fields
+            if not (amount and receipt_number and transaction_date_str and phone_number):
+                logging.error("Incomplete metadata in M-Pesa callback.")
+                raise HTTPException(status_code=400, detail="Incomplete callback metadata")
+
+            # Ensure `transaction_date_str` is a string, as `strptime` expects a string
+            if isinstance(transaction_date_str, int):
+                transaction_date_str = str(transaction_date_str)
+                
+            # Convert transaction date to datetime object
+            try:
+                transaction_date = datetime.strptime(transaction_date_str, "%Y%m%d%H%M%S")
+            except ValueError as e:
+                logging.error(f"Date parsing error: {e}")
+                raise HTTPException(status_code=400, detail="Invalid date format in callback")
+
+
+            # Fetch and update PaymentRecord in the database
+            print("Querying PaymentRecord from database.\n")
+            payment_record = db.query(PaymentRecord).filter(PaymentRecord.checkout_id == checkout_id).first()
+
+            if payment_record:
+                print("PaymentRecord found. Updating with transaction details.")
+                payment_record.amount = amount
+                payment_record.mpesa_receipt_number = receipt_number
+                payment_record.transaction_date = transaction_date
+                payment_record.phone_number = phone_number
+                payment_record.status = "Successful"
+                db.commit()
+                print("PaymentRecord updated and committed to database.")
+            else:
+                logging.warning(f"No PaymentRecord found for CheckoutID: {checkout_id}")
+
+            # Activate subscription
+            print("Activating subscription for successful payment.")
+            await retry_callback_activation(checkout_id, db)
+            print("Subscription activated successfully.")
+            return {"message": "Payment processed successfully"}
+
+        else:
+            # Handle failed payment and mark as failed
+            logging.info(f"Payment failed with ResultCode: {result_code}. Marking payment as failed.")
+            await mark_payment_failed(checkout_id, db)
+            logging.info("Payment marked as failed in database.")
+            return {"message": f"Payment failed: {result_desc}"}
+    
+    except KeyError as e:
+        logging.error(f"Missing field in callback data: {e}")
+        raise HTTPException(status_code=400, detail="Invalid callback data format")
+    
+    except SQLAlchemyError as e:
+        logging.error(f"Database error in processing callback: {e}")
+        raise HTTPException(status_code=500, detail="Database error during callback processing")
+    
+    except Exception as e:
+        logging.error(f"Unexpected error in callback processing: {e}")
+        raise HTTPException(status_code=500, detail="Error processing callback data")
 
 
 # handle retries if callback fails.
@@ -718,6 +792,7 @@ async def mark_payment_failed(checkout_id: str, db: Session):
             subscription.is_active = False
             db.commit()
             print("Payment failed, subscription inactive")
+
 
 
 
@@ -819,7 +894,7 @@ async def mark_payment_failed(checkout_id: str, db: Session):
 
 
 // File: index.js
-const API_BASE_URL = 'https://8d71-41-209-3-162.ngrok-free.app'//'http://192.168.0.102:8000' //'https://489c-41-209-3-162.ngrok-free.app';
+const API_BASE_URL = 'https://f7a4-41-209-3-162.ngrok-free.app';
 let selectedPlan = null;
 let currentUser = null;
 let paymentStatusInterval = null;

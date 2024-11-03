@@ -6,13 +6,17 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta, timezone
+from Backend.Payment.payment import app as payment_app
 from Backend.Payment.payment import MPESAPayment
-from typing import Optional
 from Backend.database.dataBase import get_db, Subscription, User, OTP
+from typing import Optional
 from pydantic import BaseModel
 import africastalking
 
 app = FastAPI()
+
+app.mount("/payment", payment_app)
+logging.info("Payment app mounted at /payment")
 
 app.add_middleware(
     CORSMiddleware,

@@ -17,6 +17,11 @@ body {
     padding: 1rem;
 }
 
+.contdown-container {
+    max-width: 400px;
+    margin: 2rem auto;
+    padding: 1rem;
+}
 .card {
     background: white;
     border-radius: 8px;
@@ -25,7 +30,7 @@ body {
     text-align: center;
 }
 
-h1 {
+h1, h3 {
     text-align: center;
     color: #1a73e8;
     margin-bottom: 1.5rem;

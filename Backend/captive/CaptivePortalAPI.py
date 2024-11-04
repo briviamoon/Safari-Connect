@@ -173,7 +173,7 @@ async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
         session_data = {
             "sub": user.phone_number,
             "message": "Hey, you enjoing the Internet?",
-            "subscription_actve": True,
+            "subscription_active": True,
             "time_left": time_left.total_seconds(),
             "plan_type": active_subscription.plan_type,
             "user_id":user.id
@@ -229,7 +229,7 @@ async def create_subscription(request: SubRequest, db: Session = Depends(get_db)
         start_time=datetime.now(timezone.utc),
         end_time=datetime.now(timezone.utc) + plan["duration"]
     )
-    print(f"Your subscription is \n {Subscription}")
+    print(f"Your subscription is \n {subscription}")
     db.add(subscription)
     db.commit()
     
@@ -243,10 +243,12 @@ async def create_subscription(request: SubRequest, db: Session = Depends(get_db)
 #creating a subscription status checker
 @app.get("/subscription-status")
 async def subscription_status(user_id: int, db: Session = Depends(get_db)):
+    print("checking subscription status\n")
     subscription = db.query(Subscription).filter(
         Subscription.user_id == user_id,
         Subscription.is_active == True
     ).first()
+    logging.info(f"subscription for {subscription.user_id} is {subscription.is_active}\n")
 
     # Calculate time left in seconds if there's an active subscription
     if subscription:

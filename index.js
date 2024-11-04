@@ -1,4 +1,4 @@
-const API_BASE_URL = 'https://f7a4-41-209-3-162.ngrok-free.app';
+const API_BASE_URL = 'https://fc70-41-209-3-162.ngrok-free.app';
 let selectedPlan = null;
 let currentUser = null;
 let paymentStatusInterval = null;
@@ -44,18 +44,20 @@ async function verifyOTP() {
 
         const token = response.data.token;
         const decodedToken = parseJwt(token);
+        console.log("This here is the decoded Token parsed with jwt");
+        console.log(decodedToken);
+        currentUser = decodedToken;
 
         if (decodedToken.subscription_active) {
             // User has an active subscription
+            console.log("calling showSessionCountdwn()");
             showSessionCountdown(decodedToken.time_left);
         } else {
-            // No active subscription
+            console.log("no active subscription");
             document.getElementById('otpForm').classList.add('hidden');
             document.getElementById('plansForm').classList.remove('hidden');
         }
 
-        currentUser = decodedToken;
-        console.log(currentUser);
     } catch (error) {
         showError('Invalid OTP. Please try again.');
     }
@@ -104,11 +106,11 @@ async function checkPaymentStatus() {
         const response = await axios.get(`${API_BASE_URL}/subscription-status`, {
             params: { user_id: currentUser.user_id }
         });
-        
+        console.log("Subscription status response: " + response);
         if (response.data.subscription_active) {
             showSuccess("Payment successful. Subscription activated!");
             clearInterval(paymentStatusInterval);
-            // Update UI to reflect active session
+            console.log("update the UI Now")
             // Start countdown with time_left from the server
             showSessionCountdown(response.data.time_left);
         } else {
@@ -157,9 +159,11 @@ function parseJwt(token) {
 }
 
 function showSessionCountdown(timeLeft) {
+    console.log("now showing session countdown");
     const countdownContainer = document.createElement('div');
     countdownContainer.className = 'countdown-container';
-    document.querySelector('.card').innerHTML = ''; // Clear previous content
+    document.getElementById('plansForm').classList.add('hidden')
+    document.querySelector('.card').innerHTML = '';
     document.querySelector('.card').appendChild(countdownContainer);
     
     function updateCountdown() {

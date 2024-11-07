@@ -1,7 +1,5 @@
 // File: Backend/captive/CaptivePortalAPI.py
 from fastapi.middleware.cors import CORSMiddleware
-import random, socket, platform, uuid, logging
-import requests, jwt, subprocess, sys, os, asyncio
 from fastapi import FastAPI, HTTPException, Depends, Request
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session
@@ -12,7 +10,9 @@ from Backend.Payment.payment import MPESAPayment
 from Backend.database.dataBase import get_db, Subscription, User, OTP
 from typing import Optional
 from pydantic import BaseModel
-import africastalking
+import random, socket, platform, uuid, logging
+import requests, jwt, subprocess, sys, os, asyncio
+import africastalking, pytz
 
 app = FastAPI()
 
@@ -37,6 +37,9 @@ africastalking.initialize(
     api_key='atsk_2c126971a075f8c3ed0dbab580d1e4cb7959577587717d23e5fca0b6387104f4e7079690'
 )
 sms = africastalking.SMS
+
+# TIMEZONE EAST AFRICA
+eat_timezone = pytz.timezone("Africa/Nairobi")
 
 ##########################################################################################
 
@@ -167,31 +170,28 @@ async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
     if active_subscription:
         # Convert `end_time` to UTC if it is offset-naive
         if active_subscription.end_time.tzinfo is None:
-            active_subscription.end_time = active_subscription.end_time.replace(tzinfo=timezone.utc)
+            active_subscription.end_time = active_subscription.end_time.astimezone(eat_timezone)
         
-        time_left = active_subscription.end_time - datetime.now(timezone.utc)
+        time_left = active_subscription.end_time - datetime.now(eat_timezone)
         
         session_data = {
             "sub": user.phone_number,
             "message": "Hey, you enjoing the Internet?",
-            "subscription_actve": True,
+            "subscription_active": True,
             "time_left": time_left.total_seconds(),
             "plan_type": active_subscription.plan_type,
             "user_id":user.id
         }
-        token = create_access_token(session_data)
-        return {"token": token, "message": "Well, Your Session Is still active..."}
-    
     # if there are no active subscriptions
     else:
-        access_data = {
+        session_data = {
             "sub": user.phone_number,
             "message": "Hello, Welcome back!",
             "subscription_active": False,
             "user_id": user.id
         }
-        token = create_access_token(access_data)
-        return {"token": token, "message": "No active subscription. Pleade select a plan"}
+    token = create_access_token(session_data)
+    return {"token": token, "message": "Well, Your Session Is still active..."}
 
 
 
@@ -227,10 +227,11 @@ async def create_subscription(request: SubRequest, db: Session = Depends(get_db)
         user_id=request.user_id,
         plan_type=request.plan_type,
         amount=plan["amount"],
-        start_time=datetime.now(timezone.utc),
-        end_time=datetime.now(timezone.utc) + plan["duration"]
+        start_time=datetime.now(eat_timezone),
+        end_time=datetime.now(eat_timezone) + plan["duration"],
+        is_active=False
     )
-    print(f"Your subscription is \n {Subscription}")
+    print(f"Your subscription is \n {subscription}")
     db.add(subscription)
     db.commit()
     
@@ -244,18 +245,20 @@ async def create_subscription(request: SubRequest, db: Session = Depends(get_db)
 #creating a subscription status checker
 @app.get("/subscription-status")
 async def subscription_status(user_id: int, db: Session = Depends(get_db)):
+    print("checking subscription status\n")
     subscription = db.query(Subscription).filter(
         Subscription.user_id == user_id,
         Subscription.is_active == True
     ).first()
+    logging.info(f"subscription for {subscription.user_id} is {subscription.is_active}\n")
 
     # Calculate time left in seconds if there's an active subscription
     if subscription:
         # Ensure `end_time` is timezone-aware
         if subscription.end_time.tzinfo is None:
-            subscription.end_time = subscription.end_time.replace(tzinfo=timezone.utc)
+            subscription.end_time = subscription.end_time.astimezone(eat_timezone)
         
-        time_left = (subscription.end_time - datetime.now(timezone.utc)).total_seconds()
+        time_left = (subscription.end_time - datetime.now(eat_timezone)).total_seconds()
         return {"subscription_active": True, "time_left": max(time_left, 0)}
     
     # Return inactive status if no subscription found
@@ -292,7 +295,7 @@ def generate_otp():
 
 #Store OTP in Database
 def store_otp(db: Session, phone_number: str, otp_code: str):
-    otp = OTP(phone_number=phone_number, otp_code=otp_code, is_used=False, created_at=datetime.now(timezone.utc))
+    otp = OTP(phone_number=phone_number, otp_code=otp_code, is_used=False, created_at=datetime.now(eat_timezone))
     db.add(otp)
     db.commit()
 
@@ -310,7 +313,7 @@ def send_otp_sms(phone_number: str, otp_code: str):
 #Create an Access Token
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=30)  # Expiry as needed
+    expire = datetime.now(eat_timezone) + timedelta(minutes=60)  # Expiry as needed
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, S_KEY, algorithm="HS256")
     return encoded_jwt
@@ -508,10 +511,11 @@ from Backend.database.dataBase import get_db, PaymentRecord, Subscription, engin
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
+from traceback import format_exc
 import requests, logging, asyncio
 import base64, time
 from datetime import datetime, timedelta
-import json
+import json, pytz
 
 app = FastAPI()
 
@@ -528,7 +532,7 @@ class MPESACredentials:
     CONSUMER_SECRET = "CrKa9Fu9hB65bpNKSF03ZWqCR8QdrHhvGZFjVRSRVM2Jb7ynfx7ctTtJUY0KEhKG"
     PASSKEY = "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"
     BUSINESS_SHORT_CODE = "174379"  # Usually your Paybill number
-    CALLBACK_URL = "https://fc70-41-209-3-162.ngrok-free.app/payment/mpesa/callback"
+    CALLBACK_URL = "https://f570-41-209-3-162.ngrok-free.app/payment/mpesa/callback"
 
 
 class MPESAPayment:
@@ -565,7 +569,7 @@ class MPESAPayment:
         self.access_token_expiry = datetime.now() + timedelta(seconds=3599)
         return self.access_token
         
-    async def initiate_stk_push(self, phone_number: str, amount: float, reference: str):
+    async def initiate_stk_push(self, phone_number: str, amount: float, reference: str, db: Session = Depends(get_db)):
         """Initiate STK push to customer's phone"""
         #phone number formating for safaricom API
         if phone_number.startswith("+"):
@@ -598,11 +602,7 @@ class MPESAPayment:
         logging.info(f"Payload sent to M-Pesa: {json.dumps(payload, indent=4)}")
         
         try:
-            response = requests.post(
-            "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
-            headers=headers,
-            json=payload
-            )
+            response = requests.post("https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest", headers=headers, json=payload)
 
             if response.status_code != 200:
                 logging.error(f"M-Pesa API Error: {response.status_code} - {response.text}")
@@ -610,7 +610,26 @@ class MPESAPayment:
             
             # Log the successful response
             print(f"M-Pesa Response: {response.json()}")
-            return response.json()
+            
+            #store data
+            response_data = response.json()
+            checkout_id = response_data.get('CheckoutRequestID')
+            
+            if not checkout_id:
+                logging.error("No CheckoutRequestID in M-Pesa response.")
+                raise HTTPException(status_code=400, detail="Missing checkout ID in M-Pesa response.")
+            
+            subscription_id = int(reference)
+            
+            #STORE IT
+            storeed = store_checkout_request(checkout_id, subscription_id, db)
+            if storeed:
+                print(f"PaymentRecord stored successfully for CheckoutID: {checkout_id}")
+            else:
+                logging.error(f"Failed To store Checkot Requestfor CheckoutReaquestID: {checkout_id}")
+                raise HTTPException(status_code=400, detail="Failed to store Checkout ID in database")
+            
+            return response_data
         
         except Exception as e:
             logging.error(f"Error initializing M-Pesa payment: {e}")
@@ -625,37 +644,36 @@ async def initiate_payment(
     subscription_id: int,
     db: Session = Depends(get_db)
 ):
+    print("Hit Gotten on /mpesa/initiate")
     mpesa = MPESAPayment()
-    result = await mpesa.initiate_stk_push(
-        phone_number=phone_number,
-        amount=amount,
-        reference=str(subscription_id)
-    )
-    print(f"This is the STK_PUSH CheckoutRequestID: {result.get('CheckoutRequestID')}\n\n\n\t")
-    
-    checkout_id = result.get('CheckoutRequestID')
-    if not checkout_id:
-        logging.error("No CheckoutRequestID received from M-Pesa.")
-        raise HTTPException(status_code=400, detail="Failed to receive checkout ID from M-Pesa.")
-
-    # Attempt to store the PaymentRecord
     try:
-        payment_record = PaymentRecord(
-            checkout_id=checkout_id,
-            subscription_id=subscription_id,
-            status="Pending"
+        result = mpesa.initiate_stk_push(
+            phone_number=phone_number,
+            amount=amount,
+            reference=str(subscription_id)
         )
-        db.add(payment_record)
-        db.commit()
-        db.refresh(payment_record)
-        print(f"PaymentRecord stored successfully for CheckoutID: {checkout_id}")
+        if result:
+            print("\n We've gotten the STK Push\n\n")
+    
+        checkout_id = result.get('CheckoutRequestID')
+        if not checkout_id:
+            logging.error("No CheckoutRequestID received from M-Pesa.")
+            raise HTTPException(status_code=400, detail="Failed to receive checkout ID from M-Pesa.")
+        
+        # Attempt to store the PaymentRecord
+        storeed = await store_checkout_request(checkout_id, subscription_id, db)
+        if storeed:
+            print(f"PaymentRecord stored successfully for CheckoutID: {checkout_id}")
+        else:
+            logging.error(f"Failed To store Checkot Requestfor CheckoutReaquestID: {checkout_id}")
+            raise HTTPException(status_code=400, detail="Failed to store Checkout ID in database")
         
         
     except Exception as e:
-        await logging.error(f"Failed to store PaymentRecord for CheckoutID {checkout_id}: {e}")
+        logging.error(f"Failed to store PaymentRecord: {e}\n{format_exc()}")
         raise HTTPException(status_code=500, detail="Failed to store payment record.")
     
-    return {"message": "Payment initiated", "checkout_id": checkout_id, "subscription_id": subscription_id}
+    return {"message": "Payment initiated", "checkout_id": checkout_id}
 
 
 
@@ -701,7 +719,7 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
                 logging.error(f"Date parsing error: {e}")
                 raise HTTPException(status_code=400, detail="Invalid date format in callback")
             
-            # Fetch and update PaymentRecord in the database
+            # Fetch and proceed update PaymentRecord in the database if the CheckoutID was in there ro begin with
             print("Querying PaymentRecord from database.\n")
             retries = 10
             for attempt in range(retries):
@@ -724,9 +742,10 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             
             # Activate subscription
             print("Activating subscription for successful payment.")
-            await retry_callback_activation(checkout_id, db)
-            print("Subscription activated successfully.")
-            return {"message": "Payment processed successfully"}
+            activated = await retry_callback_activation(checkout_id, db)
+            if activated:
+                print("Subscription activated successfully.")
+                return {"message": "Payment processed successfully"}
         else:
             # Handle failed payment and mark as failed
             logging.info(f"Payment failed with ResultCode: {result_code}. Marking payment as failed.")
@@ -748,15 +767,32 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
 async def retry_callback_activation(checkout_id: str, db: Session, retries=100, delay=2):
     for attempt in range(retries):
         try:
-            await activate_subscription(checkout_id, db)
-            print("Subscription activated after callback.")
-            return
+            result = activate_subscription(checkout_id, db)
+            if result:
+                print("Subscription activated after callback.")
+                return True
         except Exception as e:
             logging.error(f"Retry {attempt+1} failed: {e}")
             time.sleep(delay)
     logging.error(f"Failed to activate subscription after {retries} retries.")
 
 
+def activate_subscription(checkout_id: str, db: Session):
+    """Activate subscription after successful payment"""
+    # Retrieve payment record
+    payment_record = db.query(PaymentRecord).filter(PaymentRecord.checkout_id == checkout_id).first()
+    
+    if payment_record:
+        # update the subscription status.
+        subscription = db.query(Subscription).filter(Subscription.id == payment_record.subscription_id).first()
+        if subscription:
+            subscription.is_active = True
+            db.commit()
+            print("Subscription activated")
+            return True
+        else:
+            logging.warning("Subscription Record Pending.. No Found in Database\n")
+            raise HTTPException(status_code=400, detail="Subscription status not found on DataBasa\n")
 
 
 def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
@@ -776,29 +812,15 @@ def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
         )
         db.add(payment_record)
         db.commit()  # Ensure async commit
+        db.refresh(payment_record)
         print("Payment stored successfully")
+        
+        return True
     except Exception as e:
         print(f"Failed to store checkout request: {e}")
         raise HTTPException(status_code=500, detail="Failed to store payment record.")
     finally:
         db.close()
-
-
-
-
-async def activate_subscription(checkout_id: str, db: Session):
-    """Activate subscription after successful payment"""
-    # Retrieve payment record
-    payment_record = db.query(PaymentRecord).filter(PaymentRecord.checkout_id == checkout_id).first()
-    
-    if payment_record:
-        # update the subscription status.
-        subscription = db.query(Subscription).filter(Subscription.id == payment_record.subscription_id).first()
-        if subscription:
-            subscription.is_active = True
-            await db.commit()
-            print("Subscription activated")
-
 
 
 async def mark_payment_failed(checkout_id: str, db: Session):
@@ -834,11 +856,11 @@ async def mark_payment_failed(checkout_id: str, db: Session):
     <div class="container">
         <p style="align-self: center; text-align: center; font-size: medium; font-weight: 300;font-style:italic; font-family: Arial, Helvetica, sans-serif;">
             Explore A Universe Of Possibilities</p>
+            <h1>Safari Connect</h1>
         <div class="icon-container">
             <img class="safari-icon" src="resources/safari-icon2.svg" alt="safari connect">
         </div>
         <div class="card">
-            <h1>Safari Connect</h1>
 
             <!-- Registration Form -->
             <div id="registerForm">
@@ -907,6 +929,55 @@ async def mark_payment_failed(checkout_id: str, db: Session):
                 <button onclick="subscribe()" class="hidden" id="subscribeBtn">Subscribe</button>
             </div>
         </div>
+        <div class="card3">
+            <!-- Subscription Plans -->
+            <div id="plansForm3" class="hidden">
+                <h2>Choose a Plan</h2>
+                <div class="plans">
+                    <div class="plan-card" onclick="selectPlan('1hr')">
+                        <h3>1 Hour</h3>
+                        <p>KSh 10</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('2hrs')">
+                        <h3>2 Hours</h3>
+                        <p>KSh 20</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('3hrs')">
+                        <h3>3 Hours</h3>
+                        <p>KSh 30</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('8hrs')">
+                        <h3>8 Hours</h3>
+                        <p>KSh 80</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('12hrs')">
+                        <h3>12 Hours</h3>
+                        <p>KSh 100</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('24hrs')">
+                        <h3>24 Hours</h3>
+                        <p>KSh 150</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('3 days')">
+                        <h3> 3 Days</h3>
+                        <p>KSh 300</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('1 week')">
+                        <h3>1 Week</h3>
+                        <p>KSh 550</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('2 weeks')">
+                        <h3>2 Weeks</h3>
+                        <p>KSh 1000</p>
+                    </div>
+                    <div class="plan-card" onclick="selectPlan('monthly')">
+                        <h3>Monthly</h3>
+                        <p>KSh 1750</p>
+                    </div>
+                </div>
+                <button onclick="subscribe()" class="hidden" id="subscribeBtn3">Subscribe</button>
+            </div>
+        </div>
     </div>
     <script src="index.js"></script>
 </body>
@@ -915,10 +986,18 @@ async def mark_payment_failed(checkout_id: str, db: Session):
 
 
 // File: index.js
-const API_BASE_URL = 'https://fc70-41-209-3-162.ngrok-free.app';
+const API_BASE_URL = 'https://f570-41-209-3-162.ngrok-free.app';
 let selectedPlan = null;
 let currentUser = null;
 let paymentStatusInterval = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+    const card3 = document.getElementById('card3');
+    if (card3)
+    {
+        card3.classList.add('hidden');
+    }
+});
 
 async function getMacAddress() {
     try {
@@ -942,6 +1021,7 @@ async function register() {
             phone_number: phone,
             mac_address: macAddress
         });
+        //console.log("Registration response:", response);
         document.getElementById('registerForm').classList.add('hidden');
         document.getElementById('otpForm').classList.remove('hidden');
     } catch (error) {
@@ -961,18 +1041,20 @@ async function verifyOTP() {
 
         const token = response.data.token;
         const decodedToken = parseJwt(token);
+        console.log("This here is the decoded Token parsed with jwt");
+        console.log(decodedToken);
+        currentUser = decodedToken;
 
         if (decodedToken.subscription_active) {
             // User has an active subscription
+            console.log("calling showSessionCountdwn()");
             showSessionCountdown(decodedToken.time_left);
         } else {
-            // No active subscription
+            console.log("no active subscription");
             document.getElementById('otpForm').classList.add('hidden');
             document.getElementById('plansForm').classList.remove('hidden');
         }
 
-        currentUser = decodedToken;
-        console.log(currentUser);
     } catch (error) {
         showError('Invalid OTP. Please try again.');
     }
@@ -1002,6 +1084,11 @@ async function subscribe() {
         // Send request to backend
         const response = await axios.post(`${API_BASE_URL}/subscribe`, requestData);
 
+        const additionalTime = response.data.time_in_seconds || 0;
+        const timeLeft = null;
+
+        timeLeft += additionalTime;
+
         startPaymentStatusPolling();
         
         // Handle response after successful subscription initiation
@@ -1021,11 +1108,11 @@ async function checkPaymentStatus() {
         const response = await axios.get(`${API_BASE_URL}/subscription-status`, {
             params: { user_id: currentUser.user_id }
         });
-        
+        console.log("Subscription status response: " + response);
         if (response.data.subscription_active) {
             showSuccess("Payment successful. Subscription activated!");
             clearInterval(paymentStatusInterval);
-            // Update UI to reflect active session
+            console.log("update the UI Now")
             // Start countdown with time_left from the server
             showSessionCountdown(response.data.time_left);
         } else {
@@ -1074,11 +1161,36 @@ function parseJwt(token) {
 }
 
 function showSessionCountdown(timeLeft) {
+    console.log("now showing session countdown");
     const countdownContainer = document.createElement('div');
     countdownContainer.className = 'countdown-container';
-    document.querySelector('.card').innerHTML = ''; // Clear previous content
+
+    document.querySelector('.card').innerHTML = '';
     document.querySelector('.card').appendChild(countdownContainer);
+
+    countdownContainer.innerHTML = `
+        <div class="countdown-container-message">
+            <h3>Tik Tok <br> Goes The Clock</h3>
+            <p style="align-self: center; text-align: center; font-size: medium; font-weight: 300; font-style: italic; font-family: Arial, Helvetica, sans-serif;">
+                Enjoy The Internet <br> :-)
+                </p>
+        </div>
+        `;
+    const timerText = document.createElement('p');
+    timerText.className = 'timer-text';
+    countdownContainer.appendChild(timerText);
     
+    const buyMore = document.createElement('button');
+    buyMore.className = 'buy-more-button';
+    buyMore.textContent = "Buy More Time";
+    countdownContainer.appendChild(buyMore);
+
+    buyMore.addEventListener('click', () => {
+        document.getElementById('plansForm3').classList.remove('hidden');
+        document.getElementById('subscribeBtn3').classList.remove('hidden');
+        document.getElementById('card3').classList.remove('hidden');
+    });
+
     function updateCountdown() {
         if (timeLeft <= 0) {
             clearInterval(countdownInterval);
@@ -1092,7 +1204,7 @@ function showSessionCountdown(timeLeft) {
         const minutes = Math.floor((timeLeft % 3600) / 60);
         const seconds = Math.floor(timeLeft % 60);
         
-        countdownContainer.textContent = `Session time left \n ${hours}h ${minutes}m ${seconds}s`;
+        timerText.textContent = `Session time left \n ${hours}h ${minutes}m ${seconds}s`;
         timeLeft--;
     }
     
@@ -1202,7 +1314,12 @@ body {
     padding: 1rem;
 }
 
-.card {
+.contdown-container {
+    max-width: 400px;
+    margin: 2rem auto;
+    padding: 1rem;
+}
+.card, .card3 {
     background: white;
     border-radius: 8px;
     padding: 2rem;
@@ -1210,7 +1327,10 @@ body {
     text-align: center;
 }
 
-h1 {
+.card3 {
+    margin-top: 10px;
+}
+h1, h3 {
     text-align: center;
     color: #1a73e8;
     margin-bottom: 1.5rem;
@@ -1287,7 +1407,7 @@ button:hover {
 }
 
 .hidden {
-    display: none;
+    display:none;
 }
 
 .icon-container {

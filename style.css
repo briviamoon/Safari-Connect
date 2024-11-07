@@ -22,7 +22,7 @@ body {
     margin: 2rem auto;
     padding: 1rem;
 }
-.card {
+.card, .card3 {
     background: white;
     border-radius: 8px;
     padding: 2rem;
@@ -30,6 +30,9 @@ body {
     text-align: center;
 }
 
+.card3 {
+    margin-top: 10px;
+}
 h1, h3 {
     text-align: center;
     color: #1a73e8;
@@ -107,7 +110,7 @@ button:hover {
 }
 
 .hidden {
-    display: none;
+    display:none;
 }
 
 .icon-container {

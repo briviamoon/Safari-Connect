@@ -8,7 +8,7 @@ from traceback import format_exc
 import requests, logging, asyncio
 import base64, time
 from datetime import datetime, timedelta
-import json
+import json, pytz
 
 app = FastAPI()
 
@@ -25,7 +25,7 @@ class MPESACredentials:
     CONSUMER_SECRET = "CrKa9Fu9hB65bpNKSF03ZWqCR8QdrHhvGZFjVRSRVM2Jb7ynfx7ctTtJUY0KEhKG"
     PASSKEY = "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"
     BUSINESS_SHORT_CODE = "174379"  # Usually your Paybill number
-    CALLBACK_URL = "https://fc70-41-209-3-162.ngrok-free.app/payment/mpesa/callback"
+    CALLBACK_URL = "https://f570-41-209-3-162.ngrok-free.app/payment/mpesa/callback"
 
 
 class MPESAPayment:
@@ -212,7 +212,7 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
                 logging.error(f"Date parsing error: {e}")
                 raise HTTPException(status_code=400, detail="Invalid date format in callback")
             
-            # Fetch and update PaymentRecord in the database
+            # Fetch and proceed update PaymentRecord in the database if the CheckoutID was in there ro begin with
             print("Querying PaymentRecord from database.\n")
             retries = 10
             for attempt in range(retries):
@@ -270,6 +270,22 @@ async def retry_callback_activation(checkout_id: str, db: Session, retries=100, 
     logging.error(f"Failed to activate subscription after {retries} retries.")
 
 
+def activate_subscription(checkout_id: str, db: Session):
+    """Activate subscription after successful payment"""
+    # Retrieve payment record
+    payment_record = db.query(PaymentRecord).filter(PaymentRecord.checkout_id == checkout_id).first()
+    
+    if payment_record:
+        # update the subscription status.
+        subscription = db.query(Subscription).filter(Subscription.id == payment_record.subscription_id).first()
+        if subscription:
+            subscription.is_active = True
+            db.commit()
+            print("Subscription activated")
+            return True
+        else:
+            logging.warning("Subscription Record Pending.. No Found in Database\n")
+            raise HTTPException(status_code=400, detail="Subscription status not found on DataBasa\n")
 
 
 def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
@@ -298,27 +314,6 @@ def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
         raise HTTPException(status_code=500, detail="Failed to store payment record.")
     finally:
         db.close()
-
-
-
-
-def activate_subscription(checkout_id: str, db: Session):
-    """Activate subscription after successful payment"""
-    # Retrieve payment record
-    payment_record = db.query(PaymentRecord).filter(PaymentRecord.checkout_id == checkout_id).first()
-    
-    if payment_record:
-        # update the subscription status.
-        subscription = db.query(Subscription).filter(Subscription.id == payment_record.subscription_id).first()
-        if subscription:
-            subscription.is_active = True
-            db.commit()
-            print("Subscription activated")
-            return True
-        else:
-            logging.warning("Subscription Record Pending.. No Found in Database\n")
-            raise HTTPException(status_code=400, detail="Subscription status not found on DataBasa\n")
-
 
 
 async def mark_payment_failed(checkout_id: str, db: Session):

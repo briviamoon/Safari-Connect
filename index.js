@@ -1,11 +1,43 @@
-const API_BASE_URL = 'https://fc70-41-209-3-162.ngrok-free.app';
+const API_BASE_URL = 'http://192.168.0.102:8000';
 let selectedPlan = null;
 let currentUser = null;
 let paymentStatusInterval = null;
 
+document.addEventListener('DOMContentLoaded', () => {
+    const card3 = document.getElementById('card3');
+    if (card3)
+    {
+        card3.classList.add('hidden');
+    }
+    const storedToken = getToken();
+    if (storedToken) {
+        const decodedToken = parseJwt(storedToken);
+
+        if (!isTokenExpired(decodedToken)) {
+            currentUser = decodedToken;
+            console.log('User is still Authenticared:', currentUser);
+            document.getElementById('registerForm').classList.add('hidden');
+            document.getElementById('otpForm').classList.add('hidden');
+
+            if (currentUser.subscription_active) {
+                showSessionCountdown(currentUser.time_left);
+            } else {
+                document.getElementById('plansForm').classList.remove('hidden');
+            }
+        } else {
+            handleExpiredTokens();
+        }
+    } else {
+        document.getElementById('registerForm').classList.remove('hidden');
+        document.getElementById('otpForm').classList.add('hidden');
+        document.getElementById('plansForm').classList.add('hidden');
+    }
+});
+
+
 async function getMacAddress() {
     try {
-        const response = await axios.get(`${API_BASE_URL}/mac-address`);
+        const response = await axios.get(`${API_BASE_URL}/mac-address`, {headers: getAuthHeaders()});
         return response.data.mac_address || "MAC not found";
     } catch (error) {
         console.error("Failed to retrieve MAC address:", error);
@@ -24,7 +56,8 @@ async function register() {
         const response = await axios.post(`${API_BASE_URL}/register`, {
             phone_number: phone,
             mac_address: macAddress
-        });
+        }, {headers: getAuthHeaders()});
+        //console.log("Registration response:", response);
         document.getElementById('registerForm').classList.add('hidden');
         document.getElementById('otpForm').classList.remove('hidden');
     } catch (error) {
@@ -39,14 +72,20 @@ async function verifyOTP() {
     try {
         const response = await axios.post(`${API_BASE_URL}/verify-otp`, {
             phone_number: phone,
-            otp_code: otp
-        });
+            otp_code: otp,
+        }, {headers: getAuthHeaders()});
 
         const token = response.data.token;
+        localStorage.setItem('token', token);
         const decodedToken = parseJwt(token);
         console.log("This here is the decoded Token parsed with jwt");
         console.log(decodedToken);
         currentUser = decodedToken;
+
+        if (isTokenExpired(currentUser)) {
+            localStorage.removeItem('token');
+            document.getElementById('otpForm').classList.remove('hidden');
+        }
 
         if (decodedToken.subscription_active) {
             // User has an active subscription
@@ -85,7 +124,12 @@ async function subscribe() {
         console.log("Subscription request data:", requestData); // For debugging
 
         // Send request to backend
-        const response = await axios.post(`${API_BASE_URL}/subscribe`, requestData);
+        const response = await axios.post(`${API_BASE_URL}/subscribe`, requestData, {headers: getAuthHeaders()});
+
+        const additionalTime = response.data.time_in_seconds || 0;
+        let timeLeft = 0;
+
+        timeLeft += additionalTime;
 
         startPaymentStatusPolling();
         
@@ -104,9 +148,11 @@ async function subscribe() {
 async function checkPaymentStatus() {
     try {
         const response = await axios.get(`${API_BASE_URL}/subscription-status`, {
-            params: { user_id: currentUser.user_id }
-        });
-        console.log("Subscription status response: " + response);
+            params: { user_id: currentUser.user_id },
+        }, {headers: getAuthHeaders()});
+
+        console.log("Subscription status response:", response.data);
+
         if (response.data.subscription_active) {
             showSuccess("Payment successful. Subscription activated!");
             clearInterval(paymentStatusInterval);
@@ -162,10 +208,33 @@ function showSessionCountdown(timeLeft) {
     console.log("now showing session countdown");
     const countdownContainer = document.createElement('div');
     countdownContainer.className = 'countdown-container';
-    document.getElementById('plansForm').classList.add('hidden')
+
     document.querySelector('.card').innerHTML = '';
     document.querySelector('.card').appendChild(countdownContainer);
+
+    countdownContainer.innerHTML = `
+        <div class="countdown-container-message">
+            <h3>Tik Tok <br> Goes The Clock</h3>
+            <p style="align-self: center; text-align: center; font-size: medium; font-weight: 300; font-style: italic; font-family: Arial, Helvetica, sans-serif;">
+                Enjoy The Internet <br> :-)
+                </p>
+        </div>
+        `;
+    const timerText = document.createElement('p');
+    timerText.className = 'timer-text';
+    countdownContainer.appendChild(timerText);
     
+    const buyMore = document.createElement('button');
+    buyMore.className = 'buy-more-button';
+    buyMore.textContent = "Buy More Time";
+    countdownContainer.appendChild(buyMore);
+
+    buyMore.addEventListener('click', () => {
+        document.getElementById('plansForm3').classList.remove('hidden');
+        document.getElementById('subscribeBtn3').classList.remove('hidden');
+        document.getElementById('card3').classList.remove('hidden');
+    });
+
     function updateCountdown() {
         if (timeLeft <= 0) {
             clearInterval(countdownInterval);
@@ -179,7 +248,7 @@ function showSessionCountdown(timeLeft) {
         const minutes = Math.floor((timeLeft % 3600) / 60);
         const seconds = Math.floor(timeLeft % 60);
         
-        countdownContainer.textContent = `Session time left \n ${hours}h ${minutes}m ${seconds}s`;
+        timerText.textContent = `Session time left \n ${hours}h ${minutes}m ${seconds}s`;
         timeLeft--;
     }
     
@@ -191,4 +260,30 @@ function showSessionCountdown(timeLeft) {
 function startPaymentStatusPolling() {
     if (paymentStatusInterval) clearInterval(paymentStatusInterval);
     paymentStatusInterval = setInterval(checkPaymentStatus, 5000);
+}
+
+// check if Access token is expired
+function isTokenExpired(mytoken) {
+    const now = Math.floor(Date.now() / 1000);
+    return mytoken.exp < now;
+}
+
+function getToken() {
+    return localStorage.getItem('token');
+}
+
+function getAuthHeaders() {
+    const token = getToken();
+    if (token) {
+        return {
+            'Authorization': `Bearer ${token}`
+        };
+    }
+    return {};
+}
+
+function handleExpiredTokens() {
+    localStorage.removeItem('token');
+    cirrentUser = null;
+    document.getElementById('otpForm').classList.remove('hidden');
 }

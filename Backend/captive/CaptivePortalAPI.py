@@ -1,7 +1,6 @@
 from fastapi.middleware.cors import CORSMiddleware
-import random, socket, platform, uuid, logging
-import requests, jwt, subprocess, sys, os, asyncio
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -11,9 +10,13 @@ from Backend.Payment.payment import MPESAPayment
 from Backend.database.dataBase import get_db, Subscription, User, OTP
 from typing import Optional
 from pydantic import BaseModel
-import africastalking
+import random, socket, platform, uuid, logging
+import requests, jwt, subprocess, sys, os, asyncio
+import africastalking, pytz
 
 app = FastAPI()
+security = HTTPBearer
+eat_timezone = pytz.timezone("Africa/Nairobi")
 
 app.mount("/payment", payment_app)
 logging.info("Payment app mounted at /payment")
@@ -37,6 +40,8 @@ africastalking.initialize(
 )
 sms = africastalking.SMS
 
+# TIMEZONE EAST AFRICA
+
 ##########################################################################################
 
 # Routes
@@ -47,6 +52,23 @@ async def root():
         "name": "Safari Connect Captive Portal API",
         "version": "1.0.0"
     }
+
+############################################
+
+# Check on the Sesion Token
+# dependency function when I need a user session validated
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        payload = jwt.decode(credentials.credentials, S_KEY, algorithms=["HS256"])
+        return payload # maybe I'll return a user ID for other checks later.
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid session token")
+
+@app.get("/protected-endpoint")
+async def protected_route(user:dict = Depends(get_current_user)):
+    return {"message": "Access granted", "user": user}
 
 ############################################
 
@@ -166,9 +188,9 @@ async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
     if active_subscription:
         # Convert `end_time` to UTC if it is offset-naive
         if active_subscription.end_time.tzinfo is None:
-            active_subscription.end_time = active_subscription.end_time.replace(tzinfo=timezone.utc)
+            active_subscription.end_time = active_subscription.end_time.astimezone(eat_timezone)
         
-        time_left = active_subscription.end_time - datetime.now(timezone.utc)
+        time_left = active_subscription.end_time - datetime.now(eat_timezone)
         
         session_data = {
             "sub": user.phone_number,
@@ -178,19 +200,16 @@ async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
             "plan_type": active_subscription.plan_type,
             "user_id":user.id
         }
-        token = create_access_token(session_data)
-        return {"token": token, "message": "Well, Your Session Is still active..."}
-    
     # if there are no active subscriptions
     else:
-        access_data = {
+        session_data = {
             "sub": user.phone_number,
             "message": "Hello, Welcome back!",
             "subscription_active": False,
             "user_id": user.id
         }
-        token = create_access_token(access_data)
-        return {"token": token, "message": "No active subscription. Pleade select a plan"}
+    token = create_access_token(session_data)
+    return {"token": token, "message": "Well, Your Session Is still active..."}
 
 
 
@@ -226,8 +245,9 @@ async def create_subscription(request: SubRequest, db: Session = Depends(get_db)
         user_id=request.user_id,
         plan_type=request.plan_type,
         amount=plan["amount"],
-        start_time=datetime.now(timezone.utc),
-        end_time=datetime.now(timezone.utc) + plan["duration"]
+        start_time=datetime.now(eat_timezone),
+        end_time=datetime.now(eat_timezone) + plan["duration"],
+        is_active=False
     )
     print(f"Your subscription is \n {subscription}")
     db.add(subscription)
@@ -243,7 +263,7 @@ async def create_subscription(request: SubRequest, db: Session = Depends(get_db)
 #creating a subscription status checker
 @app.get("/subscription-status")
 async def subscription_status(user_id: int, db: Session = Depends(get_db)):
-    print("checking subscription status\n")
+    print(f"checking subscription status for user: {user_id}")
     subscription = db.query(Subscription).filter(
         Subscription.user_id == user_id,
         Subscription.is_active == True
@@ -254,9 +274,9 @@ async def subscription_status(user_id: int, db: Session = Depends(get_db)):
     if subscription:
         # Ensure `end_time` is timezone-aware
         if subscription.end_time.tzinfo is None:
-            subscription.end_time = subscription.end_time.replace(tzinfo=timezone.utc)
+            subscription.end_time = subscription.end_time.astimezone(eat_timezone)
         
-        time_left = (subscription.end_time - datetime.now(timezone.utc)).total_seconds()
+        time_left = (subscription.end_time - datetime.now(eat_timezone)).total_seconds()
         return {"subscription_active": True, "time_left": max(time_left, 0)}
     
     # Return inactive status if no subscription found
@@ -284,6 +304,8 @@ async def login_user(phone_number: str, db: Session = Depends(get_db)):
 
 #### FUNCTIONS ####
 
+
+
 # Generate 6 figure OTP
 def generate_otp():
     # Generate 6-digit OTP
@@ -293,7 +315,7 @@ def generate_otp():
 
 #Store OTP in Database
 def store_otp(db: Session, phone_number: str, otp_code: str):
-    otp = OTP(phone_number=phone_number, otp_code=otp_code, is_used=False, created_at=datetime.now(timezone.utc))
+    otp = OTP(phone_number=phone_number, otp_code=otp_code, is_used=False, created_at=datetime.now(eat_timezone))
     db.add(otp)
     db.commit()
 
@@ -311,7 +333,7 @@ def send_otp_sms(phone_number: str, otp_code: str):
 #Create an Access Token
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=30)  # Expiry as needed
+    expire = datetime.now(eat_timezone) + timedelta(hours=1)  # Expiry as needed
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, S_KEY, algorithm="HS256")
     return encoded_jwt

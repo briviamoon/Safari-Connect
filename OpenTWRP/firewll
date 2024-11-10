@@ -2,8 +2,8 @@
 # Allow access to captive portal
 config rule
     option name 'Allow-Captive-Portal'
-    option src 'lan'
-    option dest_port '80'
+    option src 'lan', 'wlan', 'wan'
+    option dest_port '8000'
     option proto 'tcp'
     option target 'ACCEPT'
 
@@ -13,3 +13,125 @@ config rule
     option src 'lan'
     option proto 'all'
     option target 'DROP'
+
+# Config for Mpesa Callback IPS Whitelist
+config rule
+    option name 'Allow-Mpesa-Callback-1'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102'
+    option dest_port '8000'
+    option src_ip '196.201.214.200'
+    option target 'ACCEPT'
+
+config rule
+    option name 'Allow-Mpesa-Callback-2'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102'
+    option dest_port '8000'
+    option src_ip '196.201.214.206'
+    option target 'ACCEPT'
+
+config rule
+    option name 'Allow-Mpesa-Callback-3'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102'
+    option dest_port '8000'
+    option src_ip '196.201.213.114'
+    option target 'ACCEPT'
+
+config rule
+    option name 'Allow-Mpesa-Callback-4'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102'
+    option dest_port '8000'        
+    option src_ip '196.201.214.207'
+    option target 'ACCEPT'
+
+config rule
+    option name 'Allow-Mpesa-Callback-5'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102'
+    option dest_port '8000'
+    option src_ip '196.201.214.208'
+    option target 'ACCEPT'
+
+config rule
+    option name 'Allow-Mpesa-Callback-6'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102'
+    option dest_port '8000'
+    option src_ip '196.201.213.44'
+    option target 'ACCEPT'
+    
+config rule
+    option name 'Allow-Mpesa-Callback-7'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102'
+    option dest_port '8000'             
+    option src_ip '196.201.212.127'
+    option target 'ACCEPT'
+
+config rule
+    option name 'Allow-Mpesa-Callback-8'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102'
+    option dest_port '8000'
+    option src_ip '196.201.212.138'
+    option target 'ACCEPT'
+
+config rule
+    option name 'Allow-Mpesa-Callback-9'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102'
+    option dest_port '8000'
+    option src_ip '196.201.212.129'
+    option target 'ACCEPT'
+    
+config rule
+    option name 'Allow-Mpesa-Callback-10'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102' 
+    option dest_port '8000'              
+    option src_ip '196.201.212.136'
+    option target 'ACCEPT'
+
+config rule
+    option name 'Allow-Mpesa-Callback-11'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102'
+    option dest_port '8000'
+    option src_ip '196.201.212.74'
+    option target 'ACCEPT'
+
+config rule
+    option name 'Allow-Mpesa-Callback-12'
+    option src 'wan'
+    option dest 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.102'
+    option dest_port '8000'
+    option src_ip '196.201.212.69'
+    option target 'ACCEPT'
+

@@ -32,6 +32,12 @@ app.add_middleware(
 
 S_KEY = "93f2d9b13fe90325b803bf2e8f9a66d205f3ff671990ac11423183d334d86691"
 
+ALLOWED_CALLBACK_IPS = [
+    "196.201.214.200", "196.201.214.206", "196.201.213.114",
+    "196.201.214.207", "196.201.214.208", "196.201.213.44",
+    "196.201.212.127", "196.201.212.138", "196.201.212.129",
+    "196.201.212.136", "196.201.212.74", "196.201.212.69"
+]
 
 # Africa's Talking SMS configuration
 africastalking.initialize(
@@ -70,8 +76,19 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 async def protected_route(user:dict = Depends(get_current_user)):
     return {"message": "Access granted", "user": user}
 
-############################################
 
+############################################
+# White list ip's for callbacks
+async def allow_ip_middleware(request: Request, call_next):
+    if request.url.path == "/payment/mpesa/callback":
+        client_ip = request.client.host
+        if client_ip not in ALLOWED_CALLBACK_IPS:
+            raise HTTPException(status_code=403, detail="Access denied")
+    response = await call_next(request)
+    return response
+
+
+###########################################
 #Get Client MAC ADDRESS
 
 @app.get("/mac-address")

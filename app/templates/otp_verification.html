@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Safari Connect - OTP Verification{% endblock %}
+
+{%block content%}
+<div class="container">
+    {% extends "logo.html" %}
+    <h2>OTP Verification</h2>
+    <p>Please enter the OTP sent to your phonr to compete verification.</p>
+
+    <form>
+        <label for="otp">OTP Code:</label>
+        <input type="text" id="otp" name="otp_code" placeholder="Enter OTP code" required>
+        <button type="submit">Verify OTP</button>
+    </form>
+</div>
+{% endblock %}

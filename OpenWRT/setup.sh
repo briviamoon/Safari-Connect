@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 opkg update
 opkg install nodogsplash
 opkg install iptables-mod-extra

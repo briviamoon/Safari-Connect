@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Safari Connect - Subscription Plans{% endblock %}
+
+{% block content %}
+<div class="container">
+    {% extends "logo.html" %}
+    <h2>Select a Subscription Plan</h2>
+    <p>Choose a plan to continue enjoying internet services.</p>
+
+    <div class="plans">
+        <div class="plan-card" data-plan="1hr">
+            <h3>1 Hour</h3>
+            <p>KSh 10</p>
+        </div>
+        <div class="plan-card" data-plan="2hrs">
+            <h3>2 Hours</h3>
+            <p>KSh 20</p>
+        </div>
+        <div class="plan-card" data-plan="3hrs">
+            <h3>3 Hours</h3>
+            <p>KSh 30</p>
+        </div>
+        <div class="plan-card" data-plan="8hrs">
+            <h3>8 Hours</h3>
+            <p>KSh 80</p>
+        </div>
+        <div class="plan-card" data-plan="12hrs">
+            <h3>12 Hours</h3>
+            <p>KSh 100</p>
+        </div>
+        <div class="plan-card" data-plan="24hrs">
+            <h3>24 Hours</h3>
+            <p>KSh 150</p>
+        </div>
+        <div class="plan-card" data-plan="3 days">
+            <h3>3 Days</h3>
+            <p>KSh 300</p>
+        </div>
+        <div class="plan-card" data-plan="1 week">
+            <h3>1 Week</h3>
+            <p>KSh 550</p>
+        </div>
+        <div class="plan-card" data-plan="2 weeks">
+            <h3>2 Weeks</h3>
+            <p>KSh 1000</p>
+        </div>
+        <div class="plan-card" data-plan="monthly">
+            <h3>Monthly</h3>
+            <p>KSh 1750</p>
+        </div>
+    </div>
+    <button id="subscribeBtn" class="hidden">Subscribe</button>
+</div>
+{% endblock %}

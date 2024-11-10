@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Safari Connect Portal{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="shortcut icon" href="/resources/safari-icon2.svg" type="image/x-icon">
+</head>
+<body>
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+        <p>&copy; 2024 Safari Connect</p>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.2/axios.min.js"></script>
+    <script src="/static/index.js"></script>
+</body>
+</html>

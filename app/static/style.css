@@ -11,10 +11,28 @@ body {
     line-height: 1.6;
 }
 
+/* Header and Footer Styling */
+header, footer {
+    background-color: #1a73e8;
+    color: white;
+    width: 100%;
+    padding: 1rem;
+    text-align: center;
+}
+
+footer {
+    margin-top: auto;
+}
+
+/* Container Styling */
 .container {
     max-width: 400px;
     margin: 2rem auto;
-    padding: 1rem;
+    padding: 2rem;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    text-align: center;
 }
 
 .contdown-container {
@@ -22,41 +40,31 @@ body {
     margin: 2rem auto;
     padding: 1rem;
 }
-.card, .card3 {
-    background: white;
-    border-radius: 8px;
-    padding: 2rem;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    text-align: center;
-}
 
-.card3 {
-    margin-top: 10px;
-}
-h1, h3 {
+h1, h2, h3 {
     text-align: center;
     color: #1a73e8;
-    margin-bottom: 1.5rem;
-}
-
-.form-group {
     margin-bottom: 1rem;
 }
 
+/*form and input styling*/
 label {
     display: block;
-    margin-bottom: 0.5rem;
+    margin: 1rem 0 0.5rem;
+    text-align: left;
     color: #666;
 }
 
-input {
+input[type="tel"], input[type="text"] {
     width: 100%;
     padding: 0.75rem;
     border: 1px solid #ddd;
     border-radius: 4px;
     font-size: 1rem;
+    margin-bottom: 1rem;
 }
 
+/*button styling*/
 button {
     width: 100%;
     padding: 0.75rem;
@@ -72,6 +80,45 @@ button {
 button:hover {
     background: #1557b0;
 }
+
+a {
+    color: #1a73e8;
+    text-decoration: none;
+    display: inline-block;
+    margin-top: 1rem;
+}
+
+/* Error and Success Message */
+.error {
+    color: #d93025;
+    margin-top: 0.5rem;
+    font-size: 0.875rem;
+}
+
+.success {
+    color: #188038;
+    margin-top: 0.5rem;
+    font-size: 0.875rem;
+}
+
+/******************************************************/
+.card, .card3 {
+    background: white;
+    border-radius: 8px;
+    padding: 2rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+
+.card3 {
+    margin-top: 10px;
+}
+
+.form-group {
+    margin-bottom: 1rem;
+}
+
+
 
 .plans {
     display: grid;
@@ -97,17 +144,7 @@ button:hover {
     background: #f8f9fe;
 }
 
-.error {
-    color: #d93025;
-    margin-top: 0.5rem;
-    font-size: 0.875rem;
-}
 
-.success {
-    color: #188038;
-    margin-top: 0.5rem;
-    font-size: 0.875rem;
-}
 
 .hidden {
     display:none;

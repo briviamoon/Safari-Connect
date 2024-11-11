@@ -1,11 +1,12 @@
+from fastapi import APIRouter, Request, Depends, HTTPException
 import subprocess, platform, uuid, socket, logging, asyncio
-from fastapi import APIRouter, Request
+from app.main import get_current_user
 
 router = APIRouter()
 #Get Client MAC ADDRESS
 
 @router.post("/mac-address")
-async def get_mac_address(req: Request):
+async def get_mac_address(req: Request, user=Depends(get_current_user)):
     if not isinstance(req, Request):
         logging.error("Received a non-Request object.")
         return {
@@ -95,6 +96,7 @@ def get_mac_from_ip(ip_address):
         # Method 2: Fallback to UUID (if above methods fail)
         # This will return a pseudo-MAC based on the system's UUID
         if ip_address == '127.0.0.1' or ip_address == '::1':
+            logging.warning("Returning local UUID-based MAC, which may not be reliable for client identification.")
             return str(uuid.getnode())
         
         # Additional fallback: Try socket method

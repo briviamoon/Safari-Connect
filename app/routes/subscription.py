@@ -1,17 +1,19 @@
 from fastapi import APIRouter, Depends, Request, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.config.database import get_db
 from app.services.mpesa_services import initiate_stk_push
-from app.routes.user import eat_timezone
+from app.utils.timezone import eat_timezone
+from app.schemas.subscription import SubscriptionCreate
 from datetime import datetime, timedelta
-import pytz, logging
+import logging
 
 router = APIRouter()
 
 @router.post("/subscribe")
-async def create_subscription(request: Request, db: Session = Depends(get_db)
+async def create_subscription(request: SubscriptionCreate, db: Session = Depends(get_db)
 ):
     # Plan configurations
     plans = {
@@ -31,26 +33,33 @@ async def create_subscription(request: Request, db: Session = Depends(get_db)
         raise HTTPException(status_code=400, detail="Invalid plan type")
     
     plan = plans[request.plan_type]
-    subscription = Subscription(
-        user_id=request.user_id,
-        plan_type=request.plan_type,
-        amount=plan["amount"],
-        start_time=datetime.now(eat_timezone),
-        end_time=datetime.now(eat_timezone) + plan["duration"],
-        is_active=False
-    )
-    print(f"Your subscription is \n {subscription}")
-    db.add(subscription)
-    db.commit()
     
-    # Initiate M-Pesa payment
-    response = await initiate_mpesa_payment(subscription.id, plan["amount"], db)
+    try:
+        with db.begin():
+            subscription = Subscription(
+                user_id=request.user_id,
+                plan_type=request.plan_type,
+                amount=plan["amount"],
+                start_time=eat_timezone(),
+                end_time=eat_timezone() + plan["duration"],
+                is_active=False
+            )
+        logging.info(f"Your subscription is \n {subscription}")
+        db.add(subscription)
     
-    return {"message": "Subscription initiated, payment pending", "mpesa_response": response}
+        # Initiate M-Pesa payment
+        response = await initiate_mpesa_payment(subscription.id, plan["amount"], db)
+        return {"message": "Subscription initiated, payment pending", "mpesa_response": response}
+    except SQLAlchemyError as e:
+        logging.error(f"Database error during subscription creation: {e}")
+        raise HTTPException(status_code=500, detail="Database error occurred")
+    except Exception as e:
+        logging.error(f"Unexpected error during Subscription creation: {e}")
+        raise HTTPException(status_code=500, detail="Unexpected server error")
 
 
 #creating a subscription status checker
-@router.app("/subscription-status")
+@router.post("/subscription-status")
 async def subscription_status(user_id: int, db: Session = Depends(get_db)):
     print(f"checking subscription status for user: {user_id}")
     subscription = db.query(Subscription).filter(
@@ -65,7 +74,7 @@ async def subscription_status(user_id: int, db: Session = Depends(get_db)):
         if subscription.end_time.tzinfo is None:
             subscription.end_time = subscription.end_time.astimezone(eat_timezone)
         
-        time_left = (subscription.end_time - datetime.now(eat_timezone)).total_seconds()
+        time_left = (subscription.end_time - eat_timezone()).total_seconds()
         return {"subscription_active": True, "time_left": max(time_left, 0)}
     
     # Return inactive status if no subscription found

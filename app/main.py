@@ -1,13 +1,21 @@
-from fastapi import FastAPI, Depends, security, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from app.config.database import create_database
 from app.middleware.ip_whitelist import allow_ip_middleware
 from app.routes import user, subscription, payment, mac_address
-from app.auth.security import SECRET_KEY
+from app.config.settings import settings
 import jwt
 
 app = FastAPI()
+
+# Configure templates and static files
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 # Configure CORS settings
 app.add_middleware(
@@ -32,14 +40,17 @@ create_database()
 
 # root of app
 @app.get("/")
-async def root():
-    return {"message": "Welcome to Safari Connect Captive Portal API"}
+async def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 # Check on the Sesion Token
 # dependency function when I need a user session validated
+
+security = OAuth2PasswordBearer(tokenUrl="token")
+
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=["HS256"])
+        payload = jwt.decode(credentials.credentials, settings.SECRET_KEY, algorithms=["HS256"])
         return payload # maybe I'll return a user ID for other checks later.
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Session token expired")

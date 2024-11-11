@@ -3,12 +3,12 @@
 {% block title %}Safari Connect - Welcome{% endblock %}
 
 {% block content %}
+{% include "logo.html" %}
 <div class="container">
-    {% extends "logo.html" %}
     <p>Register to enjoy our internet services.</p>
 
     <form>
-        <label for="phone">Phone Number:</label>
+        <label for="phone">Phone Number</label>
         <input type="tel" id="phone" name="phone_number" placeholder="+254 XXXXXX" required>
         <button type="submit">Login</button>
     </form>

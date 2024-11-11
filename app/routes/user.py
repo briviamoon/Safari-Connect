@@ -6,6 +6,7 @@ from app.config.database import get_db, Base
 from app.models.otp import OTP
 from app.models.subscription import Subscription
 from app.auth.security import SECRET_KEY, create_access_token
+from app.schemas.user import UserCreate, UserLogin
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
 import pytz, africastalking, jwt, subprocess, logging, platform, uuid, socket
@@ -23,7 +24,7 @@ sms = africastalking.SMS
 ########################################
 # register user
 @router.post("/register")
-async def register_user(request: Request, db: Session = Depends(get_db)):
+async def register_user(request: UserCreate, db: Session = Depends(get_db)):
     # Check if the user already exists
     existing_user = db.query(User).filter(User.phone_number == request.phone_number).first()
     if existing_user:
@@ -42,25 +43,29 @@ async def register_user(request: Request, db: Session = Depends(get_db)):
 
         # Generate and send OTP for the new registration
         otp_code = generate_otp()
-        print(f"TOP: {otp_code}")
+        logging.info(f"OTP for {request.phone_number}: {otp_code}")
         store_otp(db, request.phone_number, otp_code)
         send_otp_sms(request.phone_number, otp_code)
 
         return {"message": "Registration initiated. OTP sent for verification."}
-    except IntegrityError:
+    except IntegrityError as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail="User registration failed due to a database error.")
-
+        logging.error(f"IntegrityError while adding user {request.phone_number}: {e}")
+        raise HTTPException(status_code=400, detail="User already exists or registration failed.")
+    except Exception as e:
+        logging.error(f"Unexpected error during user registration: {e}")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 ####################################################
 
 # RETURNING USERS #
 
-@router.app("/login")
-async def login_user(phone_number: str, db: Session = Depends(get_db)):
+@router.post("/login")
+async def login_user(phone_number: UserLogin, db: Session = Depends(get_db)):
     # Check if the user is registered
-    user = db.query(User).filter(User.phone_number == phone_number).first()
+    user = db.query(User).filter(User.phone_number == phone_number.phone_number).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User not registered")
+        logging.info(f"user: {phone_number.phone_number}")
+        raise HTTPException(status_code=400, detail="User not registered")
 
     # Generate and store OTP
     otp_code = generate_otp()
@@ -226,3 +231,4 @@ def get_mac_from_ip(ip_address):
     except Exception as e:
         logging.error(f"Unexpected error in get_mac_from_ip: {e}")
         return None
+    

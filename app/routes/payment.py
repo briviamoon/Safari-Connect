@@ -16,8 +16,8 @@ router = APIRouter()
 ##########################################
 @router.post("/mpesa/callback")
 async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
-    print("M-Pesa callback route hit\n")
-    print(f"Received M-Pesa callback request\n.{request}")
+    logging.info("M-Pesa callback route hit")
+    logging.info(f"Received M-Pesa callback request\n.{request}")
     try:
         # Parse JSON payload
         stk_callback_response = await request.json()
@@ -28,7 +28,7 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
         result_code = result.get('ResultCode')
         result_desc = result.get('ResultDesc')
 
-        print(f"Extracted Callback Details - CheckoutID: {checkout_id}, ResultCode: {result_code}, ResultDesc: {result_desc}")
+        logging.info(f"Extracted Callback Details - CheckoutID: {checkout_id}, ResultCode: {result_code}, ResultDesc: {result_desc}")
         # Check if the ResultCode indicates success
         if result_code == 0:
             logging.info("Payment is successful. Extracting metadata...")
@@ -40,7 +40,7 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             transaction_date_str = metadata.get("TransactionDate")
             phone_number = metadata.get("PhoneNumber")
             # Log extracted metadata
-            print(f"Extracted Metadata - Amount: {amount}, ReceiptNumber: {receipt_number}, TransactionDate: {transaction_date_str}, PhoneNumber: {phone_number}")
+            logging.info(f"Extracted Metadata - Amount: {amount}, ReceiptNumber: {receipt_number}, TransactionDate: {transaction_date_str}, PhoneNumber: {phone_number}")
             # Validate extracted metadata fields
             if not (amount and receipt_number and transaction_date_str and phone_number):
                 logging.error("Incomplete metadata in M-Pesa callback.")
@@ -75,19 +75,21 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             payment_record.phone_number = phone_number
             payment_record.status = "Successful"
             db.commit()
-            print("PaymentRecord updated and committed to database.")
+            logging.info("PaymentRecord updated and committed to database.")
 
             # Activate subscription
-            print("Activating subscription for successful payment.")
+            logging.info("Activating subscription for successful payment.")
             activated = await retry_callback_activation(checkout_id, db)
             if activated:
-                print("Subscription activated successfully.")
+                logging.info("Subscription activated successfully.")
                 return {"message": "Payment processed successfully"}
+            else:
+                logging.error("Failed to activate subscription after payment.")
+                raise HTTPException(status_code=500, detail="Failed to activate subscription")
         else:
             # Handle failed payment and mark as failed
             logging.info(f"Payment failed with ResultCode: {result_code}. Marking payment as failed.")
             await mark_payment_failed(checkout_id, db)
-            logging.info("Payment marked as failed in database.")
             return {"message": f"Payment failed: {result_desc}"}
     except KeyError as e:
         logging.error(f"Missing field in callback data: {e}")
@@ -102,17 +104,19 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
 
 ######################################
 # handle retries if callback fails.
-async def retry_callback_activation(checkout_id: str, db: Session, retries=100, delay=2):
-    for attempt in range(retries):
+async def retry_callback_activation(checkout_id: str, db: Session, retries=10, delay=2):
+    for attempt in range(1, retries+ 1):
         try:
             result = activate_subscription(checkout_id, db)
             if result:
-                print("Subscription activated after callback.")
+                logging.info(f"Subscription activated on attempt {attempt}.")
                 return True
         except Exception as e:
             logging.error(f"Retry {attempt+1} failed: {e}")
-            time.sleep(delay)
+            await asyncio.sleep(delay * attempt)
+            
     logging.error(f"Failed to activate subscription after {retries} retries.")
+    return False
 
 
 def activate_subscription(checkout_id: str, db: Session):

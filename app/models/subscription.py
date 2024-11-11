@@ -5,7 +5,7 @@ from app.config.database import Base
 
 class Subscription(Base):
     __tablename__ = "subscriptions"
-    id = Column(Integer, primary_key=True, inder=True)
+    id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer)
     plan_type = Column(String)
     amount = Column(Float)

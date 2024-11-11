@@ -11,17 +11,28 @@ body {
     line-height: 1.6;
 }
 
-/* Header and Footer Styling */
-header, footer {
-    background-color: #1a73e8;
-    color: white;
-    width: 100%;
-    padding: 1rem;
-    text-align: center;
+.titlename{
+    padding-top: 2rem;
+}
+.page-container {
+    position: relative;
+    min-height: 100vh;
 }
 
-footer {
-    margin-top: auto;
+main {
+    padding-bottom: 2rem;
+}
+
+/* Header and Footer Styling */
+#footer {
+    position: absolute;
+    bottom: 0;
+    width: 100%;
+    height: 3rem;
+    background-color: #1a73e8;
+    color: white;
+    padding: 1rem;
+    text-align: center;
 }
 
 /* Container Styling */
@@ -51,10 +62,13 @@ h1, h2, h3 {
 label {
     display: block;
     margin: 1rem 0 0.5rem;
-    text-align: left;
+    text-align:center;
     color: #666;
 }
 
+form {
+    text-align: center;
+}
 input[type="tel"], input[type="text"] {
     width: 100%;
     padding: 0.75rem;
@@ -62,6 +76,7 @@ input[type="tel"], input[type="text"] {
     border-radius: 4px;
     font-size: 1rem;
     margin-bottom: 1rem;
+    text-align: center;
 }
 
 /*button styling*/

@@ -12,10 +12,10 @@ if [ -f "$output_file" ]; then
 fi
 
 # List of file types to ignore
-ignore_files=("*.o" "*.ico" "*.png" "*.jpg" "*.jpeg" "*.gif" "*.svg" "*.sh" "*.json" "*.md" "LICENSE")
+ignore_files=("index2.html" "index2.js" "*.o" "*.ico" "*.png" "*.jpg" "*.jpeg" "*.gif" "*.svg" "*.sh" "*.json" "*.md" "LICENSE")
 
 # Folders to ignore
-ignore_folders=("node_modules" "venv_bin")
+ignore_folders=("node_modules" "venv_bin" "__pycache__")
 
 # Function to check if a file should be ignored
 should_ignore_file() {

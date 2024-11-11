@@ -86,7 +86,7 @@ async function initRegisterPage() {
 // Get MAC Address from backend
 async function getMacAddress() {
     try {
-        const response = await axios.get(`${API_BASE_URL}/mac-address`);
+        const response = await axios.get(`${API_BASE_URL}/mac_address/mac-address`);
         return response.data.mac_address || "MAC not found";
     } catch (error) {
         console.error("Failed to retrieve MAC address:", error);

@@ -67,7 +67,8 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             else:
                 logging.warning(f"No PaymentRecord found for CheckoutID: {checkout_id}")
                 raise HTTPException(status_code=404, detail="Payment record not found")
-
+            
+            
             print("PaymentRecord found. Updating with transaction details.")
             payment_record.amount = amount
             payment_record.mpesa_receipt_number = receipt_number
@@ -79,7 +80,7 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
 
             # Activate subscription
             logging.info("Activating subscription for successful payment.")
-            activated = await retry_callback_activation(checkout_id, db)
+            activated = await retry_callback_activation(checkout_id, db=db)
             if activated:
                 logging.info("Subscription activated successfully.")
                 return {"message": "Payment processed successfully"}
@@ -107,7 +108,7 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
 async def retry_callback_activation(checkout_id: str, db: Session, retries=10, delay=2):
     for attempt in range(1, retries+ 1):
         try:
-            result = activate_subscription(checkout_id, db)
+            result = activate_subscription(checkout_id, db=db)
             if result:
                 logging.info(f"Subscription activated on attempt {attempt}.")
                 return True

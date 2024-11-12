@@ -1,12 +1,16 @@
 from fastapi import APIRouter, Depends, Request, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
+from pathlib import Path
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.models.user import User
 from app.config.database import get_db, Base
 from app.models.otp import OTP
 from app.models.subscription import Subscription
 from app.auth.security import SECRET_KEY, create_access_token
 from app.schemas.user import UserCreate, UserLogin
+from app.utils.timezone import utc_to_eat, current_utc_time
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
 import pytz, africastalking, jwt, subprocess, logging, platform, uuid, socket
@@ -38,11 +42,13 @@ async def register_user(request: UserCreate, db: Session = Depends(get_db)):
     # If user does not exist, proceed to create a new entry
     try:
         user = User(phone_number=request.phone_number, mac_address=request.mac_address)
-        db.add(user)
-        db.commit()
+        with db.begin():
+            db.add(user)
+            db.commit()
 
         # Generate and send OTP for the new registration
         otp_code = generate_otp()
+        print(f"otp: {otp_code}")
         logging.info(f"OTP for {request.phone_number}: {otp_code}")
         store_otp(db, request.phone_number, otp_code)
         send_otp_sms(request.phone_number, otp_code)
@@ -74,6 +80,37 @@ async def login_user(phone_number: UserLogin, db: Session = Depends(get_db)):
     send_otp_sms(phone_number, otp_code)
     return {"message": "OTP sent to your phone"}
 
+########################################
+# check us's subscpion
+@router.get("/check-subscription")
+async def check_subscription_status(user_id: int, db: Session = Depends(get_db)):
+    """
+    Endpoint to check if a user has an active subscription.
+    """
+    try:
+        subscription = db.query(Subscription).filter(
+            Subscription.user_id == user_id,
+            Subscription.is_active == True,
+            Subscription.end_time > datetime.now(timezone.utc)
+        ).first()
+
+        if subscription:
+            # just make sure of timezone awareness here.
+            if subscription.end_time.tzinfo is None:
+                subscription.end_time = subscription.end_time.replace(tzinfo=timezone.utc)
+                
+            time_left = (subscription.end_time - current_utc_time()).total_seconds()
+            return {"subscription_active": True, "time_left": max(time_left, 0)}
+        else:
+            return {"subscription_active": False, "time_left": 0}
+
+    except SQLAlchemyError as e:
+        logging.error(f"Database error while checking subscription for user {user_id}: {e}")
+        return JSONResponse(status_code=500, content={"detail": "Error checking subscription status"})
+    except Exception as e:
+        logging.error(f"Unexpected error for user {user_id}: {e}")
+        return JSONResponse(status_code=500, content={"detail": "Unexpected server error"})
+
 
 #######################################
 # verify user's otp
@@ -82,60 +119,78 @@ class OtpRight (BaseModel):
     otp_code: str
 @router.post("/verify-otp")
 async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
-    #check is OTP is valid and not used
+    
+    print("verifying otp...")
+    # Validate OTP
     otp = db.query(OTP).filter(
         OTP.phone_number == re.phone_number,
         OTP.otp_code == re.otp_code,
         OTP.is_used == False
     ).first()
-    
+
     if not otp:
-        raise HTTPException(status_code=400, detail="Invalid OTP")
+        logging.warning(f"Invalid OTP attempt for phone number: {re.phone_number}")
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
     
-    #Then Mark It as Used
+    # Mark OTP as used
     otp.is_used = True
     db.commit()
-    
-    # Check if the user is registered
+    logging.info(f"OTP {re.otp_code} for phone number {re.phone_number} marked as used.")
+
+    # Fetch the user
     user = db.query(User).filter(User.phone_number == re.phone_number).first()
     if not user:
+        logging.error(f"User not found for phone number: {re.phone_number}")
         raise HTTPException(status_code=404, detail="User not registered")
-    
-    #check for an active subscripiton.
+    logging.info(f"User {user.id} found for phone number {re.phone_number}")
+
+    # Check for an active subscription
     active_subscription = db.query(Subscription).filter(
         Subscription.user_id == user.id,
         Subscription.is_active == True,
         Subscription.end_time > datetime.now(timezone.utc)
     ).first()
-    
-    #if there's an active subscription, Generate a token leading to the countdown to the end of their session.
+
+    # Prepare session data
     if active_subscription:
-        # Convert `end_time` to UTC if it is offset-naive
-        if active_subscription.end_time.tzinfo is None:
-            active_subscription.end_time = active_subscription.end_time.astimezone(eat_timezone)
-        
-        time_left = active_subscription.end_time - datetime.now(eat_timezone)
-        
+        time_left = (active_subscription.end_time - datetime.now(timezone.utc)).total_seconds()
         session_data = {
             "sub": user.phone_number,
-            "message": "Hey, you enjoing the Internet?",
+            "message": "Enjoying your Internet?",
             "subscription_active": True,
-            "time_left": time_left.total_seconds(),
+            "time_left": time_left,
             "plan_type": active_subscription.plan_type,
-            "user_id":user.id
+            "user_id": user.id
         }
-    # if there are no active subscriptions
+        logging.info(f"Active subscription found for user {user.id}. Time left: {time_left}s")
     else:
         session_data = {
             "sub": user.phone_number,
-            "message": "Hello, Welcome back!",
+            "message": "Welcome back!",
             "subscription_active": False,
             "user_id": user.id
         }
+        logging.info(f"No active subscription found for user {user.id}.")
+
+    # Generate and return token
     token = create_access_token(session_data)
-    return {"token": token, "message": "Well, Your Session Is still active..."}
+    logging.info(f"Token generated for user {user.id}.")
+    return {"token": token, "message": session_data["message"]}
+
 #######################################
 
+# serve the OTP verification templates back using a GET route
+templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
+
+@router.get("/otp-verification", response_class=HTMLResponse)
+async def otp_verification_page(request: Request):
+    return templates.TemplateResponse("otp_verification.html", {"request": request})
+
+
+@router.get("/log-in", response_class=HTMLResponse)
+async def returnlogin(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+#######################################
 
 # Generate 6 figure OTP
 def generate_otp():
@@ -146,7 +201,7 @@ def generate_otp():
 
 #Store OTP in Database
 def store_otp(db: Session, phone_number: str, otp_code: str):
-    otp = OTP(phone_number=phone_number, otp_code=otp_code, is_used=False, created_at=datetime.now(eat_timezone))
+    otp = OTP(phone_number=phone_number, otp_code=otp_code, is_used=False, created_at=current_utc_time())
     db.add(otp)
     db.commit()
 

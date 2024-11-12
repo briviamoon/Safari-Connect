@@ -5,16 +5,20 @@ from app.models.subscription import Subscription
 from app.models.user import User
 from app.config.database import get_db
 from app.services.mpesa_services import initiate_stk_push
-from app.utils.timezone import eat_timezone
+from app.utils.timezone import current_utc_time, utc_to_eat
 from app.schemas.subscription import SubscriptionCreate
-from datetime import datetime, timedelta
+from fastapi.templating import Jinja2Templates
+from pathlib import Path
+from fastapi.responses import HTMLResponse
+from datetime import datetime, timedelta, timezone
 import logging
 
 router = APIRouter()
 
 @router.post("/subscribe")
-async def create_subscription(request: SubscriptionCreate, db: Session = Depends(get_db)
-):
+async def create_subscription(request: SubscriptionCreate, db: Session = Depends(get_db)):
+    print(f"Received request: {request}")
+    print(f"User ID from request: {request.user_id}")
     # Plan configurations
     plans = {
         "1hr": {"amount": 1, "duration": timedelta(hours=1)},
@@ -40,16 +44,18 @@ async def create_subscription(request: SubscriptionCreate, db: Session = Depends
                 user_id=request.user_id,
                 plan_type=request.plan_type,
                 amount=plan["amount"],
-                start_time=eat_timezone(),
-                end_time=eat_timezone() + plan["duration"],
+                start_time=current_utc_time(),
+                end_time=current_utc_time() + plan["duration"],
                 is_active=False
             )
-        logging.info(f"Your subscription is \n {subscription}")
+        logging.info(f"Created subscription object: {subscription}")
         db.add(subscription)
+        db.commit()
     
         # Initiate M-Pesa payment
-        response = await initiate_mpesa_payment(subscription.id, plan["amount"], db)
+        response = await initiate_mpesa_payment(subscription.id, plan["amount"], db=db)
         return {"message": "Subscription initiated, payment pending", "mpesa_response": response}
+    
     except SQLAlchemyError as e:
         logging.error(f"Database error during subscription creation: {e}")
         raise HTTPException(status_code=500, detail="Database error occurred")
@@ -59,7 +65,7 @@ async def create_subscription(request: SubscriptionCreate, db: Session = Depends
 
 
 #creating a subscription status checker
-@router.post("/subscription-status")
+@router.get("/subscription-status")
 async def subscription_status(user_id: int, db: Session = Depends(get_db)):
     print(f"checking subscription status for user: {user_id}")
     subscription = db.query(Subscription).filter(
@@ -72,9 +78,10 @@ async def subscription_status(user_id: int, db: Session = Depends(get_db)):
     if subscription:
         # Ensure `end_time` is timezone-aware
         if subscription.end_time.tzinfo is None:
-            subscription.end_time = subscription.end_time.astimezone(eat_timezone)
+            subscription.end_time = subscription.end_time.replace(tzinfo=timezone.utc)
         
-        time_left = (subscription.end_time - eat_timezone()).total_seconds()
+        time_left = (subscription.end_time - current_utc_time()).total_seconds()
+        logging.info(f"Time left for user {user_id}: {time_left} seconds")
         return {"subscription_active": True, "time_left": max(time_left, 0)}
     
     # Return inactive status if no subscription found
@@ -97,10 +104,19 @@ def initiate_mpesa_payment(subscription_id: int, amount: float, db: Session):
         response = initiate_stk_push(
             phone_number=phone_number,
             amount=amount,
-            reference=str(subscription_id) # unique to match with callback
+            reference=str(subscription_id), # unique to match with callback
+            db=db
         )
         logging.info(f"In the initiate_mpesa_payment call, this is the response: \n {response}")
         return response
     except Exception as e:
         print(f"Error initializing payment: {e}")
         raise HTTPException(status_code=500, detail="M-Pesa payment initiaizaion failed")
+    
+
+# redirect user to plans
+templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
+
+@router.get("/subscription-success", response_class=HTMLResponse)
+async def subscription_success_page(request: Request):
+    return templates.TemplateResponse("subscription_success.html", {"request": request})

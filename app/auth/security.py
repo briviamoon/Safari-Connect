@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from jose import jwt
 from app.config.settings import settings
-from app.utils.timezone import eat_timezone
+from app.utils.timezone import current_utc_time, utc_to_eat
 
 
 # shields
@@ -13,7 +13,7 @@ def create_access_token(data: dict):
     """Generates access token with set expiry time,
     encryption algorythm and secret key"""
     to_encode = data.copy()
-    expire = eat_timezone() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = current_utc_time()  + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 

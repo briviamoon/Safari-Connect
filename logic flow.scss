@@ -1,0 +1,110 @@
+// Step 1: User loads the portal page
+displayLoadingPage()
+
+// Step 2: Check if the user has an authentication token
+if (hasAuthToken()) {
+    // Step 3: Validate the token's expiration
+    if (isTokenExpired()) {
+        // Token is expired, user needs to verify via OTP
+        displayOTPVerificationPage()
+        
+        // Step 4: Wait for OTP verification response
+        if (isOTPVerified()) {
+            // Reissue a new authentication token
+            token = issueNewAuthToken()
+            
+            // Check if the user has an active subscription
+            if (hasActiveSubscription(token)) {
+                // User has a valid subscription
+                redirectToCountdownPage(getRemainingSessionTime(token))
+            } else {
+                // No active subscription found
+                redirectToSubscriptionPage()
+            }
+        } else {
+            // OTP verification failed or timed out
+            displayError("OTP verification failed. Please try again.")
+        }
+    } else {
+        // Token is valid (not expired)
+        if (hasActiveSubscription(getAuthToken())) {
+            // User has an active subscription
+            redirectToCountdownPage(getRemainingSessionTime(getAuthToken()))
+        } else {
+            // No active subscription found
+            redirectToSubscriptionPage()
+        }
+    }
+} else {
+    // No authentication token found, new user or session
+    displayRegistrationPage()
+
+    // Step 5: User registers and gets verified via OTP
+    if (isRegistrationSuccessful() && isOTPVerified()) {
+        // Issue a new token after successful registration and OTP
+        token = issueNewAuthToken()
+
+        // Check for active subscription
+        if (hasActiveSubscription(token)) {
+            redirectToCountdownPage(getRemainingSessionTime(token))
+        } else {
+            redirectToSubscriptionPage()
+        }
+    } else {
+        // Registration or OTP verification failed
+        displayError("Registration or OTP verification failed.")
+    }
+}
+
+// Helper Functions (Pseudocode)
+function hasAuthToken() {
+    // Check for the existence of a stored token (e.g., in cookies or session)
+}
+
+function isTokenExpired() {
+    // Validate if the token has passed its expiration date
+}
+
+function isOTPVerified() {
+    // Process OTP verification and return the result
+}
+
+function issueNewAuthToken() {
+    // Create and return a new authentication token
+}
+
+function hasActiveSubscription(token) {
+    // Check with the backend if the token is linked to an active subscription
+}
+
+function getRemainingSessionTime(token) {
+    // Fetch and return the remaining session time for the user
+}
+
+function displayLoadingPage() {
+    // Render a loading animation or screen
+}
+
+function displayOTPVerificationPage() {
+    // Show OTP input and verification page
+}
+
+function displayRegistrationPage() {
+    // Display the registration page for new users
+}
+
+function redirectToCountdownPage(sessionTime) {
+    // Redirect user to the countdown page with the session timer
+}
+
+function redirectToSubscriptionPage() {
+    // Redirect user to a page to select or renew a subscription
+}
+
+function displayError(message) {
+    // Show an error message to the user
+}
+
+function isRegistrationSuccessful() {
+    // Return true if user registration is successful
+}

@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Request, Depends, HTTPException
 import subprocess, platform, uuid, socket, logging, asyncio
-from app.main import get_current_user
+from app.auth.deps import get_current_user
 
 router = APIRouter()
 #Get Client MAC ADDRESS
 
-@router.post("/mac-address")
+@router.get("/mac-address")
 async def get_mac_address(req: Request, user=Depends(get_current_user)):
     if not isinstance(req, Request):
         logging.error("Received a non-Request object.")

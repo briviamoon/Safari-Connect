@@ -2,6 +2,9 @@
 from datetime import datetime, timezone
 import pytz
 
-def eat_timezone():
-    timezone_eat = pytz.timezone('Africa/Nairobi')
-    return datetime.now(timezone_eat)
+def current_utc_time():
+    return datetime.now(timezone.utc)
+
+def utc_to_eat(utc_time):
+    eat_time_zone = pytz.timezone('Africa/Nairobi')
+    return utc_time.astimezone(eat_time_zone)

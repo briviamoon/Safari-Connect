@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import engine
 from datetime import datetime
 from sqlalchemy.orm import Session, sessionmaker
-import logging, json, base64, time
+import logging, json, base64, httpx, time
+
+
+access_token = None
+access_token_expiry = datetime.min
 
 async def initiate_stk_push(phone_number: str, amount: float, reference: str, db: Session = Depends(get_db)):
         """Initiate STK push to customer's phone"""
@@ -22,39 +26,49 @@ async def initiate_stk_push(phone_number: str, amount: float, reference: str, db
         access_token = await get_access_token()
         password, timestamp = generate_password()
         
+        print(f"Access Token Retrieved: {access_token}")
+        
+        if not access_token:
+            logging.error("Access token was not obtained.")
+            raise HTTPException(status_code=500, detail="Failed to obtain access token")
+        
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}",
         }
         
         payload = {
-            "BusinessShortCode": settings.mpesa_shortcode,
+            "BusinessShortCode": settings.M_PESA_SHORTCODE,
             "Password": password,
             "Timestamp": timestamp,
             "TransactionType": "CustomerPayBillOnline",
             "Amount": int(amount),
             "PartyA": phone_number,
-            "PartyB": settings.mpesa_shortcode,
+            "PartyB": settings.M_PESA_SHORTCODE,
             "PhoneNumber": phone_number,
-            "CallBackURL": settings.callback_url,
+            "CallBackURL": settings.CALLBACK_URL,
             "AccountReference": f"Safari Connect. Session_ID: {reference}",
             "TransactionDesc": f"Payment for internet Subscription"
         }
         
-        logging.info(f"Payload sent to M-Pesa: {json.dumps(payload, indent=4)}")
+        print(f"Payload sent to M-Pesa: {json.dumps(payload, indent=4)}")
         
         try:
-            response = requests.post(settings.callback_url, headers=headers, json=payload)
-            
+            async with httpx.AsyncClient() as client:
+                response = requests.post(
+            'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
+            headers=headers,
+            json=payload
+        )            
             if response.status_code != 200:
                 logging.error(f"M-Pesa API Error: {response.status_code} - {response.text}")
                 raise HTTPException(status_code=400, detail="Failed to initiate payment")
             
             # Log the successful response
-            print(f"M-Pesa Response: {response.json()}")
-            
+            print(f"Response after Payload: \n\t{response.json()}")
             #store data
             response_data = response.json()
+            logging.info(f"M-Pesa Response: {response.json()}")
             checkout_id = response_data.get('CheckoutRequestID')
             
             if not checkout_id:
@@ -64,27 +78,32 @@ async def initiate_stk_push(phone_number: str, amount: float, reference: str, db
             subscription_id = int(reference)
             
             #STORE IT
-            storeed = store_checkout_request(checkout_id, subscription_id, db)
+            storeed = store_checkout_request(checkout_id, subscription_id, db=db)
             if storeed:
-                print(f"PaymentRecord stored successfully for CheckoutID: {checkout_id}")
+                logging.info(f"PaymentRecord stored successfully for CheckoutID: {checkout_id}")
             else:
                 logging.error(f"Failed To store Checkot Requestfor CheckoutReaquestID: {checkout_id}")
                 raise HTTPException(status_code=400, detail="Failed to store Checkout ID in database")
             
             return response_data
         
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Network error during M-Pesa request: {e}")
+            raise HTTPException(status_code=500, detail="Network error during M-Pesa payment initialization")
+        except KeyError as e:
+            logging.error(f"Key error in M-Pesa response: {e}")
+            raise HTTPException(status_code=400, detail="Unexpected M-Pesa response format")
         except Exception as e:
-            logging.error(f"Error initializing M-Pesa payment: {e}")
-            raise HTTPException(status_code=500, detail="M-Pesa payment initialization failed")
-
+            logging.error(f"General error during M-Pesa payment initialization: {e}")
+            raise HTTPException(status_code=500, detail="Unexpected error during payment initialization")
 
 #########################################
 
 
-def generate_password(self):
+def generate_password():
         """Generate the M-Pesa password using the provided passkey"""
         timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-        data_to_encode = f"{settings.mpesa_shortcode}{settings.mpesa_passkey}{timestamp}"
+        data_to_encode = f"{settings.M_PESA_SHORTCODE}{settings.M_PESA_PASSKEY}{timestamp}"
         return base64.b64encode(data_to_encode.encode()).decode('utf-8'), timestamp
 
 
@@ -92,14 +111,22 @@ def generate_password(self):
 
 
 async def get_access_token():
-        """Get the access token required to make M-Pesa API calls"""
-        if access_token and datetime.now() < access_token_expiry:
-            return access_token
+    print(f"creating access toke using \n\t{settings.M_PESA_CONSUMER_SECRET, settings.M_PESA_CONSUMER_KEY}")
+    """Get the access token required to make M-Pesa API calls"""
+    global access_token, access_token_expiry  # Ensure these are global if used outside this function
 
-        credentials = base64.b64encode(
-            f"{settings.mpesa_consumer_key}:{settings.mpesa_consumer_secret}".encode()
-        ).decode('utf-8')
+    # Check if an access token is already available and still valid
+    if access_token and datetime.now() < access_token_expiry:
+        return access_token
+    
 
+    credentials = base64.b64encode(
+        f"{settings.M_PESA_CONSUMER_KEY}:{settings.M_PESA_CONSUMER_SECRET}".encode()
+    ).decode('utf-8')
+    
+    print(f"these are the credentials: {credentials}")
+
+    try:
         response = requests.get(
             "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
             headers={"Authorization": f"Basic {credentials}"}
@@ -109,19 +136,25 @@ async def get_access_token():
             raise HTTPException(status_code=400, detail="Failed to get access token")
 
         result = response.json()
-        access_token = result['access_token']
-        # Token expires in 1 hour
+        print(f"response from safaricom: \n{result}")
+        access_token = result['access_token']  # Ensure this line executes successfully
+        # Set token expiry (1 hour)
         access_token_expiry = datetime.now() + timedelta(seconds=3599)
         return access_token
+    
+    except KeyError as e:
+        logging.error(f"Key error in access token response: {e}")
+        raise HTTPException(status_code=400, detail="Invalid response format from access token request")
+    except Exception as e:
+        logging.error(f"Error fetching access token: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch access token")
 
 
 ############################################
 def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
-    """When initiating an M-Pesa transaction, you will receive a CheckoutRequestID that serves as a unique identifier.
-    Store this ID and subscription_id in the database to verify payment status later."""
-    
-    SessionLocal = sessionmaker(autocommit=False, bind=engine)
-    db = SessionLocal()
+    """
+    Store the M-Pesa checkout request in the database.
+    """
     
     print(f"Storing checkout request - CheckoutID: {checkout_id}, SubscriptionID: {subscription_id}")
     
@@ -140,5 +173,3 @@ def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
     except Exception as e:
         print(f"Failed to store checkout request: {e}")
         raise HTTPException(status_code=500, detail="Failed to store payment record.")
-    finally:
-        db.close()

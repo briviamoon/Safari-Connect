@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, Float
 from app.config.database import Base
-from datetime import datetime, timezone
+from app.utils.timezone import current_utc_time
 
 
 # base mode for Payment record in db
@@ -14,5 +14,5 @@ class PaymentRecord(Base):
     mpesa_receipt_number = Column(String, nullable=True)
     transaction_date = Column(DateTime, nullable=True)
     phone_number = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=current_utc_time)
 

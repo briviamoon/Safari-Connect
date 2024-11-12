@@ -3,12 +3,12 @@
 {% block title %}Safari Connect - OTP Verification{% endblock %}
 
 {%block content%}
+{% include "logo.html" %}
 <div class="container">
-    {% include "logo.html" %}
     <h2>OTP Verification</h2>
     <p>Please enter the OTP sent to your phonr to compete verification.</p>
 
-    <form>
+    <form id="otp-form" onsubmit="return false;">
         <label for="otp">OTP Code:</label>
         <input type="text" id="otp" name="otp_code" placeholder="Enter OTP code" required>
         <button type="submit">Verify OTP</button>

@@ -1,19 +1,27 @@
 from pydantic_settings import BaseSettings
+from pydantic import Field, ValidationError
 
-# environment variables
 class Settings(BaseSettings):
-    SECRET_KEY: str
-    DATABASE_URL: str
-    M_PESA_CONSUMER_KEY: str  # Changed from MPESA_CONSUMER_KEY
-    M_PESA_CONSUMER_SECRET: str  # Changed from MPESA_CONSUMER_SECRET
-    M_PESA_PASSKEY: str  # Changed from MPESA_PASSKEY
-    M_PESA_SHORTCODE: str  # Changed from MPESA_SHORTCODE
-    CALLBACK_URL: str
-    NGROK_URL: str
+    """
+    Application settings loaded from environment variables.
+    Provides default values and validation for critical settings.
+    """
+    SECRET_KEY: str = Field(..., env="SECRET_KEY")
+    DATABASE_URL: str = Field(..., env="DATABASE_URL")
+    M_PESA_CONSUMER_KEY: str = Field(..., env="M_PESA_CONSUMER_KEY")
+    M_PESA_CONSUMER_SECRET: str = Field(..., env="M_PESA_CONSUMER_SECRET")
+    M_PESA_PASSKEY: str = Field(..., env="M_PESA_PASSKEY")
+    M_PESA_SHORTCODE: str = Field(..., env="M_PESA_SHORTCODE")
+    CALLBACK_URL: str = Field(..., env="CALLBACK_URL")
+    NGROK_URL: str = Field(..., env="NGROK_URL")
 
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
 
-settings = Settings()
-
-# print("Available environment variables:", os.environ.keys())
+try:
+    settings = Settings()
+except ValidationError as e:
+    print("Configuration Error: Ensure all required environment variables are set.")
+    print(e.json())
+    raise

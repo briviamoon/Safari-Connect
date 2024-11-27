@@ -13,14 +13,17 @@ def create_database():
     """Ensuring the tables are created only once"""
 try:
     inspector = inspect(engine)
-    if not inspector.get_table_names():  # Check if tables already exist
+    existing_tables = inspector.get_table_names()
+    if not existing_tables:  # Check if tables already exist
         print("Setting up database tables...")
         Base.metadata.create_all(bind=engine)
         print("Tables created.")
+    else:
+        print(f"Database tables already exist: {existing_tables}. Skipping creation")
 except Exception as e:
-    print(f"Database connectio failed: {e}")
+    print(f"Database connection failed: {e}")
 
-# the dependancy
+# the dependency
 def get_db():
     db = SessionLocal()
     try:

@@ -1,4 +1,5 @@
-const API_BASE_URL = 'http://192.168.0.102:8000';
+const API_BASE_URL = "{{ ngrok_url }}";
+console.log("API Base URL:", API_BASE_URL);
 let selectedPlan = null;
 let currentUser = null;
 let paymentStatusInterval = null;
@@ -132,10 +133,16 @@ async function initRegisterPage() {
         try {
             console.log("Sending registration request...");
             const response = await axios.post(`${API_BASE_URL}/user/register`, { phone_number: phone, mac_address: macAddress });
-            console.log("Registration successful:", response.data);
-            showSuccess(response.data.message || "Registered successfully");
-            localStorage.setItem('phone_number', phone);
-            window.location.href = '/user/otp-verification';
+            if (response) {
+                console.log("Registration successful:", response.data);
+                showSuccess(response.data.message || "Registered successfully");
+                localStorage.setItem('phone_number', phone);
+                setTimeout(5000);
+                window.location.href = '/user/otp-verification';
+            }
+            else {
+                console.log("couldn't get response from server\n");
+            }
         } catch (error) {
             console.error("Registration failed:", error.response ? error.response.data : error.message);
             showError("Registration failed. Please try again.");

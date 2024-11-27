@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from jose import jwt
+import jwt
 from app.config.settings import settings
 from app.utils.timezone import current_utc_time, utc_to_eat
 
@@ -23,4 +23,3 @@ def verify_token(token: str):
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except jwt.JWTError:
         return None
-

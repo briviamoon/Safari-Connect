@@ -4,3 +4,9 @@ sqlalchemy
 psycopg2-binary
 africastalking
 jwt
+python-jose
+pydantic
+pydantic-settings
+pytz
+jinja2
+httpx

@@ -5,4 +5,4 @@ class UserCreate(BaseModel):
     mac_address: str
 
 class UserLogin(BaseModel):
-    phone_number: str = Field(..., regex=r"^\+254\d{9}$")
+    phone_number: str = Field(..., pattern=r"^\+254\d{9}$")

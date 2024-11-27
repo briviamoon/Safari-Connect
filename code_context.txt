@@ -37,7 +37,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
 
 // File: app/auth/security.py
 from datetime import datetime, timedelta
-from jose import jwt
+import jwt
 from app.config.settings import settings
 from app.utils.timezone import current_utc_time, utc_to_eat
 
@@ -64,7 +64,6 @@ def verify_token(token: str):
 
 
 
-
 // File: app/config/database.py
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.ext.declarative import declarative_base
@@ -81,14 +80,17 @@ def create_database():
     """Ensuring the tables are created only once"""
 try:
     inspector = inspect(engine)
-    if not inspector.get_table_names():  # Check if tables already exist
+    existing_tables = inspector.get_table_names()
+    if not existing_tables:  # Check if tables already exist
         print("Setting up database tables...")
         Base.metadata.create_all(bind=engine)
         print("Tables created.")
+    else:
+        print(f"Database tables already exist: {existing_tables}. Skipping creation")
 except Exception as e:
-    print(f"Database connectio failed: {e}")
+    print(f"Database connection failed: {e}")
 
-# the dependancy
+# the dependency
 def get_db():
     db = SessionLocal()
     try:
@@ -100,8 +102,7 @@ def get_db():
 
 
 // File: app/config/settings.py
-from pydantic import BaseSettings
-import os
+from pydantic_settings import BaseSettings
 
 # environment variables
 class Settings(BaseSettings):
@@ -112,6 +113,7 @@ class Settings(BaseSettings):
     M_PESA_PASSKEY: str  # Changed from MPESA_PASSKEY
     M_PESA_SHORTCODE: str  # Changed from MPESA_SHORTCODE
     CALLBACK_URL: str
+    NGROK_URL: str
 
     class Config:
         env_file = ".env"
@@ -119,6 +121,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # print("Available environment variables:", os.environ.keys())
+
 
 
 // File: app/main.py
@@ -166,9 +169,9 @@ create_database()
 # root of app
 @app.get("/")
 async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse("index.html", {"request": request, "ngrok_url": settings.NGROK_URL})
 
-# Check on the Sesion Token
+# Check on the Session Token
 # dependency function when I need a user session validated
 
 @app.get("/protected-endpoint")
@@ -706,14 +709,18 @@ sms = africastalking.SMS
 @router.post("/register")
 async def register_user(request: UserCreate, db: Session = Depends(get_db)):
     # Check if the user already exists
+    print("Regisering User\n")
     existing_user = db.query(User).filter(User.phone_number == request.phone_number).first()
     if existing_user:
         # Resend OTP for the existing user
+        print("Calling OTP Verification\n")
         otp_code = generate_otp()
-        print(f"TOP: {otp_code}")
+        print(f"YOUR OTP: {otp_code}")
         store_otp(db, request.phone_number, otp_code)
         send_otp_sms(request.phone_number, otp_code)
         return {"message": "User already registered. New OTP sent for verification."}
+    else:
+        print("Database issues\n")
 
     # If user does not exist, proceed to create a new entry
     try:
@@ -724,6 +731,7 @@ async def register_user(request: UserCreate, db: Session = Depends(get_db)):
 
         # Generate and send OTP for the new registration
         otp_code = generate_otp()
+        print(f"otp: {otp_code}")
         logging.info(f"OTP for {request.phone_number}: {otp_code}")
         store_otp(db, request.phone_number, otp_code)
         send_otp_sms(request.phone_number, otp_code)
@@ -794,6 +802,8 @@ class OtpRight (BaseModel):
     otp_code: str
 @router.post("/verify-otp")
 async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
+    
+    print("verifying otp...")
     # Validate OTP
     otp = db.query(OTP).filter(
         OTP.phone_number == re.phone_number,
@@ -860,13 +870,18 @@ async def otp_verification_page(request: Request):
     return templates.TemplateResponse("otp_verification.html", {"request": request})
 
 
+@router.get("/log-in", response_class=HTMLResponse)
+async def returnlogin(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 #######################################
 
 # Generate 6 figure OTP
 def generate_otp():
     # Generate 6-digit OTP
     import random
-    return str(random.randint(100000, 999999))
+    otp = random.randint(100000, 999999)
+    print("Generated The OTP\n")
+    return otp
 
 
 #Store OTP in Database
@@ -988,7 +1003,8 @@ class UserCreate(BaseModel):
     mac_address: str
 
 class UserLogin(BaseModel):
-    phone_number: str = Field(..., regex=r"^\+254\d{9}$")
+    phone_number: str = Field(..., pattern=r"^\+254\d{9}$")
+
 
 
 // File: app/services/mpesa_services.py
@@ -1170,7 +1186,8 @@ def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
 
 
 // File: app/static/index.js
-const API_BASE_URL = 'http://192.168.0.102:8000';
+const API_BASE_URL = "{{ ngrok_url }}";
+console.log("API Base URL:", API_BASE_URL);
 let selectedPlan = null;
 let currentUser = null;
 let paymentStatusInterval = null;
@@ -1180,18 +1197,18 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log("Document loaded, checking for authentication token...");
     const token = localStorage.getItem('authToken');
     const path = window.location.pathname;
-    
+
     if (token) {
         console.log("Token found. Decoding...");
         const decodedToken = decodeJwt(token);
-        
+
         if (!decodedToken) {
             console.error("Failed to decode token. Redirecting to OTP verification...");
             localStorage.removeItem('authToken');
             window.location.href = '/user/otp-verification';
             return;
         }
-        
+
         console.log("Decoded Token:", decodedToken);
 
         if (isTokenExpired(decodedToken)) {
@@ -1304,10 +1321,16 @@ async function initRegisterPage() {
         try {
             console.log("Sending registration request...");
             const response = await axios.post(`${API_BASE_URL}/user/register`, { phone_number: phone, mac_address: macAddress });
-            console.log("Registration successful:", response.data);
-            showSuccess(response.data.message || "Registered successfully");
-            localStorage.setItem('phone_number', phone);
-            window.location.href = '/user/otp-verification';
+            if (response) {
+                console.log("Registration successful:", response.data);
+                showSuccess(response.data.message || "Registered successfully");
+                localStorage.setItem('phone_number', phone);
+                setTimeout(5000);
+                window.location.href = '/user/otp-verification';
+            }
+            else {
+                console.log("couldn't get response from server\n");
+            }
         } catch (error) {
             console.error("Registration failed:", error.response ? error.response.data : error.message);
             showError("Registration failed. Please try again.");
@@ -1477,9 +1500,65 @@ function showSessionCountdown(timeLeft) {
     buyMore.textContent = "Buy More Time";
     countdownContainer.appendChild(buyMore);
 
+    const plansContainer = document.createElement('div');
+    plansContainer.className = 'plans-container hidden';  // Hidden by default
+    plansContainer.innerHTML = `
+        <div class="plans">
+        <div class="plan-card" data-plan="1hr">
+            <h3>1 Hour</h3>
+            <p>KSh 10</p>
+        </div>
+        <div class="plan-card" data-plan="2hrs">
+            <h3>2 Hours</h3>
+            <p>KSh 20</p>
+        </div>
+        <div class="plan-card" data-plan="3hrs">
+            <h3>3 Hours</h3>
+            <p>KSh 30</p>
+        </div>
+        <div class="plan-card" data-plan="8hrs">
+            <h3>8 Hours</h3>
+            <p>KSh 80</p>
+        </div>
+        <div class="plan-card" data-plan="12hrs">
+            <h3>12 Hours</h3>
+            <p>KSh 100</p>
+        </div>
+        <div class="plan-card" data-plan="24hrs">
+            <h3>24 Hours</h3>
+            <p>KSh 150</p>
+        </div>
+        <div class="plan-card" data-plan="3 days">
+            <h3>3 Days</h3>
+            <p>KSh 300</p>
+        </div>
+        <div class="plan-card" data-plan="1 week">
+            <h3>1 Week</h3>
+            <p>KSh 550</p>
+        </div>
+        <div class="plan-card" data-plan="2 weeks">
+            <h3>2 Weeks</h3>
+            <p>KSh 1000</p>
+        </div>
+        <div class="plan-card" data-plan="monthly">
+            <h3>Monthly</h3>
+            <p>KSh 1750</p>
+        </div>
+    </div>
+    <button id="subscribeBtn" class="hidden">Subscribe</button>
+    `;
+    document.querySelector('.container').appendChild(plansContainer);
+
     buyMore.addEventListener('click', () => {
-        console.log("User clicked 'Buy More Time'. Redirecting...");
-        window.location.href = '/subscription/subscription-success';
+        console.log("User clicked 'Buy More Time'. Showing available plans...");
+        plansContainer.classList.toggle('hidden');
+    });
+
+    plansContainer.addEventListener('click', (event) => {
+        if (event.target.classList.contains('plan-card')) {
+            console.log(`Plan selected: ${event.target.getAttribute('data-plan')}`);
+            initSubscriptionPage();
+        }
     });
 
     function updateCountdown() {
@@ -1879,6 +1958,111 @@ def utc_to_eat(utc_time):
     return utc_time.astimezone(eat_time_zone)
 
 
+// File: initserver.py
+import socket
+import os
+import subprocess
+import time
+import json
+
+def getAddress():
+    """Retrieve the IPv4 address of the host."""
+    hostname = socket.gethostname()
+    try:
+        ipv4 = socket.gethostbyname(hostname)
+        return ipv4
+    except socket.gaierror as e:
+        print(f"Error getting IP address: {e}")
+        return None
+
+
+def update_env(ipv4, ngrok_url):
+    """Update the .env file with the provided IPv4 and callback URL."""
+    env_file_path = ".env"
+    db_url = f'DATABASE_URL="postgresql://safariconnect:1Amodung%40%21.@{ipv4}:5432/safaridb"\n'
+    cb_url = f'CALLBACK_URL="{ngrok_url}/payment/mpesa/callback"\n\n'
+    ngrok = f'NGROK_URL="{ngrok_url}"\n\n'
+
+    if not os.path.exists(env_file_path):
+        with open(env_file_path, 'w') as env_file:
+            env_file.writelines([db_url, cb_url, ngrok])
+        return
+
+    with open(env_file_path, 'r') as env_file:
+        lines = env_file.readlines()
+
+    updated = False
+    with open(env_file_path, 'w') as env_file:
+        for line in lines:
+            if line.startswith('DATABASE_URL'):
+                env_file.write(db_url)
+                updated = True
+            elif line.startswith('CALLBACK_URL'):
+                env_file.write(cb_url)
+                updated = True
+            elif line.startswith('NGROK_URL'):
+                if line.strip() != ngrok.strip():
+                    env_file.write(ngrok)
+                    updated = True
+            else:
+                env_file.write(line)
+                
+        if not any(line.startswith('NGROK_URL') for line in lines):
+            env_file.write(ngrok)
+
+def get_ngrok_url():
+    """Start ngrok and retrieve the public URL."""
+    try:
+        process = subprocess.Popen(['ngrok', 'http', '8000'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        for _ in range(10):  # Wait up to 10 seconds for ngrok to start
+            time.sleep(1)
+            output, error = subprocess.Popen(
+                ['curl', '--silent', 'http://localhost:4040/api/tunnels'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            ).communicate()
+            if output:
+                try:
+                    tunnels = json.loads(output.decode('utf-8'))
+                    for tunnel in tunnels.get("tunnels", []):
+                        if "http" in tunnel["public_url"]:
+                            process.terminate()  # Clean up ngrok process
+                            return tunnel["public_url"]
+                except (json.JSONDecodeError, KeyError) as e:
+                    print(f"Error parsing ngrok response: {e}")
+        process.terminate()
+        print("Timeout waiting for ngrok.")
+        return None
+    except Exception as e:
+        print(f"Error starting ngrok: {e}")
+        return None
+
+def start_server(ipv4):
+    """Start the server using Uvicorn."""
+    process = subprocess.Popen(
+        ["uvicorn", "app.main:app", "--host", ipv4, "--port", "8000", "--reload"]
+    )
+    try:
+        process.wait()
+    except KeyboardInterrupt:
+        print("\nStopping server...")
+        process.terminate()
+        process.wait()
+
+if __name__ == "__main__":
+    ipv4 = getAddress()
+    ngrok_url = get_ngrok_url()
+
+    if ipv4 and ngrok_url:
+        print(f"IPv4: {ipv4}")
+        print(f"ngrok: {ngrok_url}")
+        update_env(ipv4, ngrok_url)
+        start_server(ipv4)
+    else:
+        print("Failed to retrieve IP address or ngrok URL.")
+
+
+
+
 // File: logic flow.scss
 // Step 1: User loads the portal page
 displayLoadingPage()
@@ -2198,6 +2382,12 @@ sqlalchemy
 psycopg2-binary
 africastalking
 jwt
+python-jose
+pydantic
+pydantic-settings
+pytz
+jinja2
+httpx
 
 
 // File: secret.py
@@ -2208,5 +2398,34 @@ def secretKey():
     print(f"{secret}\n")
 
 secretKey()
+
+
+// File: tests/dbconfig.py
+from sqlalchemy import create_engine, MetaData
+
+DATABASE_URL = "postgresql://safariconnect:1Amodung%40%21.@192.168.0.100:5432/safaridb"
+engine = create_engine(DATABASE_URL)
+metadata = MetaData()
+
+# Test connection
+try:
+    with engine.connect() as connection:
+        print("Database connected successfully.")
+except Exception as e:
+    print(f"Error connecting to database: {e}")
+
+
+
+// File: tests/testotp.py
+def generate_otp():
+    # Generate 6-digit OTP
+    import random
+    return str(random.randint(100000, 999999))
+
+try:
+    otp = generate_otp()
+    print(f"OTP GENERATED: {otp}")
+except Exception as e:
+    print(f"Error generating OTP: {e}")
 
 

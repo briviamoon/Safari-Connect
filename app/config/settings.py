@@ -1,5 +1,4 @@
-from pydantic import BaseSettings
-import os
+from pydantic_settings import BaseSettings
 
 # environment variables
 class Settings(BaseSettings):
@@ -10,6 +9,7 @@ class Settings(BaseSettings):
     M_PESA_PASSKEY: str  # Changed from MPESA_PASSKEY
     M_PESA_SHORTCODE: str  # Changed from MPESA_SHORTCODE
     CALLBACK_URL: str
+    NGROK_URL: str
 
     class Config:
         env_file = ".env"

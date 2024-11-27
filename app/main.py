@@ -42,9 +42,9 @@ create_database()
 # root of app
 @app.get("/")
 async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse("index.html", {"request": request, "ngrok_url": settings.NGROK_URL})
 
-# Check on the Sesion Token
+# Check on the Session Token
 # dependency function when I need a user session validated
 
 @app.get("/protected-endpoint")

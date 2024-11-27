@@ -30,14 +30,18 @@ sms = africastalking.SMS
 @router.post("/register")
 async def register_user(request: UserCreate, db: Session = Depends(get_db)):
     # Check if the user already exists
+    print("Regisering User\n")
     existing_user = db.query(User).filter(User.phone_number == request.phone_number).first()
     if existing_user:
         # Resend OTP for the existing user
+        print("Calling OTP Verification\n")
         otp_code = generate_otp()
-        print(f"TOP: {otp_code}")
+        print(f"YOUR OTP: {otp_code}")
         store_otp(db, request.phone_number, otp_code)
         send_otp_sms(request.phone_number, otp_code)
         return {"message": "User already registered. New OTP sent for verification."}
+    else:
+        print("Database issues\n")
 
     # If user does not exist, proceed to create a new entry
     try:
@@ -196,7 +200,9 @@ async def returnlogin(request: Request):
 def generate_otp():
     # Generate 6-digit OTP
     import random
-    return str(random.randint(100000, 999999))
+    otp = random.randint(100000, 999999)
+    print("Generated The OTP\n")
+    return otp
 
 
 #Store OTP in Database

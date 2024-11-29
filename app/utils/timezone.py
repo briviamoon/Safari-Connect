@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytz
 
 def current_utc_time():
-    return datetime.now(timezone.utc)
+    return datetime.now().replace(tzinfo=timezone.utc)
 
 def utc_to_eat(utc_time):
     eat_time_zone = pytz.timezone('Africa/Nairobi')

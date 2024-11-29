@@ -5,13 +5,19 @@ import time
 import json
 
 def getAddress():
-    """Retrieve the IPv4 address of the host."""
-    hostname = socket.gethostname()
+    """Retrieve the IPv4 address of the active network interface."""
     try:
+        hostname = socket.gethostname()
         ipv4 = socket.gethostbyname(hostname)
+
+        if ipv4.startswith("127."):
+            # use socket lib to look at avilable interfacesa
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("192.168.0.1", 80))
+                ipv4 = s.getsockname()[0]
         return ipv4
-    except socket.gaierror as e:
-        print(f"Error getting IP address: {e}")
+    except Exception as e:
+        print(f"Error getting IPV4 address: {e}")
         return None
 
 
@@ -19,8 +25,9 @@ def update_env(ipv4, ngrok_url):
     """Update the .env file with the provided IPv4 and callback URL."""
     env_file_path = ".env"
     db_url = f'DATABASE_URL="postgresql://safariconnect:1Amodung%40%21.@{ipv4}:5432/safaridb"\n'
-    cb_url = f'CALLBACK_URL="{ngrok_url}/payment/mpesa/callback"\n\n'
-    ngrok = f'NGROK_URL="{ngrok_url}"\n\n'
+    cb_url = f'CALLBACK_URL="{ngrok_url}/payment/mpesa/callback"\n'
+    ngrok = f'NGROK_URL="{ngrok_url}"\n'
+    ipv4_ip = f'IPV4_CURRENT="http://{ipv4}:8000"\n'
 
     if not os.path.exists(env_file_path):
         with open(env_file_path, 'w') as env_file:
@@ -40,14 +47,18 @@ def update_env(ipv4, ngrok_url):
                 env_file.write(cb_url)
                 updated = True
             elif line.startswith('NGROK_URL'):
-                if line.strip() != ngrok.strip():
-                    env_file.write(ngrok)
-                    updated = True
+                env_file.write(ngrok)
+                updated = True
+            elif line.startswith('IPV4_CURRENT'):
+                env_file.write(ipv4_ip)
+                updated = True
             else:
                 env_file.write(line)
                 
         if not any(line.startswith('NGROK_URL') for line in lines):
             env_file.write(ngrok)
+        elif not any(line.startswith('IPV4_CURRENT') for line in lines):
+            env_file.write(ipv4_ip)
 
 def get_ngrok_url():
     """Start ngrok and retrieve the public URL."""

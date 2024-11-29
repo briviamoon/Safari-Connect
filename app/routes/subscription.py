@@ -67,24 +67,34 @@ async def create_subscription(request: SubscriptionCreate, db: Session = Depends
 #creating a subscription status checker
 @router.get("/subscription-status")
 async def subscription_status(user_id: int, db: Session = Depends(get_db)):
-    print(f"checking subscription status for user: {user_id}")
-    subscription = db.query(Subscription).filter(
-        Subscription.user_id == user_id,
-        Subscription.is_active == True
-    ).first()
-    logging.info(f"subscription for {subscription.user_id} is {subscription.is_active}\n")
-
-    # Calculate time left in seconds if there's an active subscription
-    if subscription:
-        # Ensure `end_time` is timezone-aware
-        if subscription.end_time.tzinfo is None:
-            subscription.end_time = subscription.end_time.replace(tzinfo=timezone.utc)
-        
-        time_left = (subscription.end_time - current_utc_time()).total_seconds()
-        logging.info(f"Time left for user {user_id}: {time_left} seconds")
-        return {"subscription_active": True, "time_left": max(time_left, 0)}
+    print(f"Checking subscription status for user: {user_id}")
     
-    # Return inactive status if no subscription found
+    # Query the subscription record for the given user_id
+    subscription = db.query(Subscription).filter(Subscription.user_id == user_id).first()
+    
+    if not subscription:
+        logging.info(f"No subscription found for user {user_id}")
+        return {"subscription_active": False, "time_left": 0}
+
+    logging.info(f"Subscription for user {subscription.user_id} is {'active' if subscription.is_active else 'inactive'}")
+    
+    # If the subscription is active, calculate the time left
+    if subscription.is_active:
+        if subscription.end_time:
+            # Ensure `end_time` is timezone-aware
+            if subscription.end_time.tzinfo is None:
+                subscription.end_time = subscription.end_time.replace(tzinfo=timezone.utc)
+            
+            # Calculate time left in seconds
+            time_left = (subscription.end_time - current_utc_time()).total_seconds()
+            logging.info(f"Time left for user {user_id}: {time_left} seconds")
+            return {"subscription_active": True, "time_left": max(time_left, 0)}
+
+        # Handle case where `end_time` is None or invalid
+        logging.warning(f"Subscription for user {user_id} has no valid end_time")
+        return {"subscription_active": True, "time_left": 0}
+    
+    # If subscription is inactive
     return {"subscription_active": False, "time_left": 0}
 
 

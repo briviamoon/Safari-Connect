@@ -9,5 +9,5 @@ class User(Base):
     phone_number = Column(String, unique=True, index=True)
     mac_address = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
-    is_active = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=False)
 

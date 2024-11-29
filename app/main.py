@@ -40,15 +40,19 @@ app.include_router(mac_address.router, prefix="/mac_address", tags=["MAC Address
 # Init Db
 init_database()
 
-@app.on_event("startup")
-def startup_event():
-    load_dotenv() # Load environment variables on startup
+
+@app.options("/mac_address/{mac_address}")
+async def handle_options():
+    return {"message": "CORS preflight request handled"}
+
 
 # root of app
 @app.get("/")
 async def home(request: Request):
-    ngrok_url = os.getenv("NGROK_URL")
-    return templates.TemplateResponse("index.html", {"request": request, "ngrok_url": ngrok_url, "message":"HAllo Tes"})
+    ngrok_url = settings.NGROK_URL
+    ipv4_url = settings.IPV4_CURRENT
+    print(f"Serving NgrokURL as API BASE: {ngrok_url}\n")
+    return templates.TemplateResponse("index.html", {"request": request, "skibidi": ngrok_url, "rizz": ipv4_url})
 
 # Check on the Session Token
 # dependency function when I need a user session validated

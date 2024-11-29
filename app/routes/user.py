@@ -13,7 +13,7 @@ from app.schemas.user import UserCreate, UserLogin
 from app.utils.timezone import utc_to_eat, current_utc_time
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
-import pytz, africastalking, jwt, subprocess, logging, platform, uuid, socket
+import pytz, africastalking, subprocess, logging, platform, uuid, socket
 
 router = APIRouter()
 eat_timezone = pytz.timezone("Africa/Nairobi")
@@ -26,45 +26,50 @@ sms = africastalking.SMS
 
 
 ########################################
-# register user
+# User Registration
 @router.post("/register")
 async def register_user(request: UserCreate, db: Session = Depends(get_db)):
-    # Check if the user already exists
-    print("Regisering User\n")
+    """
+    Register a new user and send OTP for verification.
+    """
+    logging.info("Registering User")
     existing_user = db.query(User).filter(User.phone_number == request.phone_number).first()
+
     if existing_user:
-        # Resend OTP for the existing user
-        print("Calling OTP Verification\n")
+        logging.info(f"existing user found in database: {existing_user.phone_number}")
+        logging.info("generating new otp ...")
         otp_code = generate_otp()
-        print(f"YOUR OTP: {otp_code}")
-        store_otp(db, request.phone_number, otp_code)
-        send_otp_sms(request.phone_number, otp_code)
+        logging.info(f"{existing_user.phone_number} OTP: {otp_code}")
+        logging.info("Storing otp to database ...")
+        store_otp(db, existing_user.phone_number, otp_code)
+        logging.info("OTP Stored ...")
+        logging.info(f"Sending SMS OTP to user {existing_user.phone_number}")
+        # send_otp_sms(existing_user, otp_code)
+        logging.info(f"OTP sent to {existing_user.phone_number}")
         return {"message": "User already registered. New OTP sent for verification."}
-    else:
-        print("Database issues\n")
 
-    # If user does not exist, proceed to create a new entry
     try:
+        logging.info(f"User not in database ... Adding user: {request.phone_number}")
         user = User(phone_number=request.phone_number, mac_address=request.mac_address)
-        with db.begin():
-            db.add(user)
-            db.commit()
-
-        # Generate and send OTP for the new registration
+        db.add(user)
+        logging.info("commit to database ...")
+        db.commit()
+        
+        logging.info("Generating OTP ...")
         otp_code = generate_otp()
-        print(f"otp: {otp_code}")
-        logging.info(f"OTP for {request.phone_number}: {otp_code}")
+        logging.info(f"New User {request.phone_number} OTP: {otp_code}")
+        logging.info("Storing OTP ...")
         store_otp(db, request.phone_number, otp_code)
-        send_otp_sms(request.phone_number, otp_code)
-
+        logging.info("OTP Stored ...")
+        logging.info("Sending OTP Via SMS ...")
+        # send_otp_sms(request.phone_number, otp_code)
+        logging.info("SMS Sent ...")
         return {"message": "Registration initiated. OTP sent for verification."}
-    except IntegrityError as e:
-        db.rollback()
-        logging.error(f"IntegrityError while adding user {request.phone_number}: {e}")
-        raise HTTPException(status_code=400, detail="User already exists or registration failed.")
+    
     except Exception as e:
-        logging.error(f"Unexpected error during user registration: {e}")
+        logging.error(f"Error during user registration: {e}")
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+
 ####################################################
 
 # RETURNING USERS #
@@ -81,7 +86,7 @@ async def login_user(phone_number: UserLogin, db: Session = Depends(get_db)):
     otp_code = generate_otp()
     store_otp(db, phone_number, otp_code)
     print(f"Returning OTP:{otp_code}\n")
-    send_otp_sms(phone_number, otp_code)
+    # send_otp_sms(phone_number, otp_code)
     return {"message": "OTP sent to your phone"}
 
 ########################################
@@ -171,15 +176,16 @@ async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
         session_data = {
             "sub": user.phone_number,
             "message": "Welcome back!",
-            "subscription_active": False,
+            "subscription_active": user.is_active,
             "user_id": user.id
         }
         logging.info(f"No active subscription found for user {user.id}.")
 
     # Generate and return token
+    logging.info("generating user access token ...")
     token = create_access_token(session_data)
     logging.info(f"Token generated for user {user.id}.")
-    return {"token": token, "message": session_data["message"]}
+    return {"access_token": token, "message": session_data["message"]}
 
 #######################################
 
@@ -206,15 +212,33 @@ def generate_otp():
 
 
 #Store OTP in Database
-def store_otp(db: Session, phone_number: str, otp_code: str):
-    otp = OTP(phone_number=phone_number, otp_code=otp_code, is_used=False, created_at=current_utc_time())
-    db.add(otp)
-    db.commit()
+def store_otp(db, phone_number: str, otp_code: str):
+    """
+    store the generated otp to db forspecific number
+    """
+    try:
+        otp = OTP(
+            phone_number=phone_number, 
+            otp_code=otp_code, 
+            is_used=False, 
+            created_at=current_utc_time(), 
+        )
+        db.add(otp)
+        db.commit()
+        logging.info("CONFIRMED: OTP STORED SUCCESS ...")
+    except Exception as e:
+        db.rollback()
+        print(f"Error storing OTP: {e}")
+        raise
 
 
 #Send OTP SMS
 def send_otp_sms(phone_number: str, otp_code: str):
-    message = f"Your OTP code is: {otp_code}"
+    logging.info(f"Trying to send OTP: {otp_code} ...")
+    message = f"""
+    Thank you for choosing Safariconnect 
+    Your one time OTP code is: {otp_code}
+    """
     try:
         response = sms.send(message, [phone_number])
         return response

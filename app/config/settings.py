@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     M_PESA_SHORTCODE: str = Field(..., env="M_PESA_SHORTCODE")
     CALLBACK_URL: str = Field(..., env="CALLBACK_URL")
     NGROK_URL: str = Field(..., env="NGROK_URL")
+    IPV4_CURRENT: str = Field(..., env="IPV4_CURRENT")
 
     class Config:
         env_file = ".env"

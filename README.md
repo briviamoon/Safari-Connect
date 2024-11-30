@@ -39,13 +39,13 @@
 
 ##  Overview
 
-<code>❯ REPLACE-ME</code>
+<code>❯ I'll add this later, You'll have to go through it manually for now.</code>
 
 ---
 
 ##  Features
 
-<code>❯ REPLACE-ME</code>
+<code>❯ Same for this one...</code>
 
 ---
 

@@ -1,5 +1,5 @@
 <p align="center">
-    <img src="https://github.com/briviamoon/Safari-connect/app/static/resources/safari-icon2.svg" align="center" width="30%">
+    <img src="https://github.com/briviamoon/Safari-Connect/blob/Development/app/static/resources/safari-icon2.svg" align="center" width="30%">
 </p>
 <p align="center"><h1 align="center"><code> SAFARICONNECT</code></h1></p>
 <p align="center">

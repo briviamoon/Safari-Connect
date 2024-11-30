@@ -1,6 +1,8 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field, ValidationError
 
+
+# noinspection PyArgumentList
 class Settings(BaseSettings):
     """
     Application settings loaded from environment variables.

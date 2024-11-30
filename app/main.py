@@ -1,17 +1,15 @@
-from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.security import OAuth2PasswordBearer
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+
+from fastapi import FastAPI, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from app.auth.deps import get_current_user
 from app.config.database import init_database
+from app.config.settings import settings
 from app.middleware.ip_whitelist import allow_ip_middleware
 from app.routes import user, subscription, payment, mac_address
-from app.config.settings import settings
-from app.auth.deps import get_current_user
-from dotenv import load_dotenv
-import jwt, os
 
 app = FastAPI()
 
@@ -19,13 +17,16 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
+NGROK_URL = settings.NGROK_URL
+ALLOWED_METHODS = ["*"]
+ALLOWED_HEADERS = ["*"]
 # Configure CORS settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.NGROK_URL],
+    allow_origins=[f"{NGROK_URL}"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods= ALLOWED_METHODS,
+    allow_headers= ALLOWED_HEADERS,
 )
 
 # Middlewares

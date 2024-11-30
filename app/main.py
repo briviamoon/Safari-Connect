@@ -22,7 +22,7 @@ templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 # Configure CORS settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[settings.NGROK_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

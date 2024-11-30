@@ -15,6 +15,7 @@ function handleAuthenticatedUser(token) {
 
     const decodedToken = decodeJwt(token);
     const subscriptionChecked = localStorage.getItem('subscriptionChecked');
+    const subscriptionActive = localStorage.getItem('subscriptionActive');
 
     if (!decodedToken || isTokenExpired(decodedToken)) {
         localStorage.removeItem('authToken');
@@ -25,6 +26,8 @@ function handleAuthenticatedUser(token) {
     currentUser = decodedToken;
     if (!subscriptionChecked) {
         checkUserSubscription(decodedToken.user_id);
+    } else if (!subscriptionActive && subscriptionChecked) {
+        redirectTo('/subscription/subscription-success');
     }
 }
 
@@ -66,6 +69,10 @@ function subIsChecked() {
     localStorage.setItem('subscriptionChecked', true);
 }
 
+function setSubIsActive() {
+    localStorage.setItem('subscriptionActive,', true);
+}
+
 // Check subscription status
 async function checkUserSubscription(userId) {
     try {
@@ -75,6 +82,8 @@ async function checkUserSubscription(userId) {
         });
 
         if (response.data.subscription_active) {
+            subIsChecked();
+            setSubIsActive();
             showSessionCountdown(response.data.time_left)
         }
         else {
@@ -108,35 +117,37 @@ function initRegisterPage() {
 
 //Subscribe action
 document.addEventListener("DOMContentLoaded", function () {
-    const planCards = document.querySelectorAll(".plan-card");
-    const subscribeButton = document.getElementById("subscribeBtn");
+    if (window.location.href == "subscription/subscription-success") {
+        const planCards = document.querySelectorAll(".plan-card");
+        const subscribeButton = document.getElementById("subscribeBtn");
 
-    // Handle plan card selection
-    planCards.forEach(function(card) {
-        card.addEventListener("click", function() {
-            // Deselect other cards
-            planCards.forEach(card => card.classList.remove("selected"));
-            // Mark the clicked card as selected
-            card.classList.add("selected");
-            // Show the subscribe button
-            subscribeButton.classList.remove("hidden");
+        // Handle plan card selection
+        planCards.forEach(function (card) {
+            card.addEventListener("click", function () {
+                // Deselect other cards
+                planCards.forEach(card => card.classList.remove("selected"));
+                // Mark the clicked card as selected
+                card.classList.add("selected");
+                // Show the subscribe button
+                subscribeButton.classList.remove("hidden");
+            });
         });
-    });
 
-    // Handle subscribe button click
-    subscribeButton.addEventListener("click", async function() {
-        const selectedPlan = document.querySelector(".plan-card.selected");
+        // Handle subscribe button click
+        subscribeButton.addEventListener("click", async function () {
+            const selectedPlan = document.querySelector(".plan-card.selected");
 
-        if (selectedPlan) {
-            const planName = selectedPlan.getAttribute("data-plan");
-            console.log("User selected plan:", planName);
+            if (selectedPlan) {
+                const planName = selectedPlan.getAttribute("data-plan");
+                console.log("User selected plan:", planName);
 
-            // Send subscription request to the backend
-            await subscribe(planName);
-        } else {
-            console.log("Please select a plan first.");
-        }
-    });
+                // Send subscription request to the backend
+                await subscribe(planName);
+            } else {
+                console.log("Please select a plan first.");
+            }
+        });
+    }
 });
 
 // Function to send the subscription request to the backend
@@ -145,7 +156,7 @@ async function subscribe(selectedPlan) {
         showError("Please select a subscription plan.");
         return;
     }
-    
+
     if (!currentUser || !currentUser.user_id) {
         showError("User information is missing. Please try re-verifying your OTP.");
         return;
@@ -157,18 +168,16 @@ async function subscribe(selectedPlan) {
             plan_type: selectedPlan
         };
         console.log("Subscription request data:", requestData);
-        
+
         const response = await axios.post(`${API_BASE_URL}/subscription/subscribe`, requestData, {
             headers: getAuthHeaders()
         });
 
-        
+
         const additionalTime = response.data.time_in_seconds || 0;
         let timeLeft = 0;
         timeLeft += additionalTime;
 
-        // Start polling for payment status
-        startPaymentStatusPolling();
         
         if (response.data && response.data.message) {
             showSuccess(response.data.message);
@@ -176,10 +185,13 @@ async function subscribe(selectedPlan) {
             showSuccess("Subscription initiated. Please complete payment on your phone.");
         }
 
+        // Start polling for payment status
+        startPaymentStatusPolling();
+
     } catch (error) {
         // Enhanced error handling
         console.error("Subscription error:", error.response ? error.response.data : error.message);
-        
+
         // Display user-friendly error message
         if (error.response && error.response.data && error.response.data.detail) {
             showError(error.response.data.detail);

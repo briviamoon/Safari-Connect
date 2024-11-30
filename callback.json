@@ -1,8 +1,8 @@
 {
   "Body": {
     "stkCallback": {
-      "MerchantRequestID": "8ed5-4489-a67f-881890b925f21770532",
-      "CheckoutRequestID": "ws_CO_12112024195947380748167395",
+      "MerchantRequestID": "24d3-4f75-872a-6fd999327d4f190377",
+      "CheckoutRequestID": "ws_CO_30112024122914250748167395",
       "ResultCode": 0,
       "ResultDesc": "The service request is processed successfully.",
       "CallbackMetadata": {

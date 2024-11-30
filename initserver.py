@@ -64,24 +64,32 @@ def get_ngrok_url():
     """Start ngrok and retrieve the public URL."""
     try:
         process = subprocess.Popen(['ngrok', 'http', '8000'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        for _ in range(10):  # Wait up to 10 seconds for ngrok to start
+        for _ in range(20):  # Increased wait time to 20 seconds for Ngrok to fully start
             time.sleep(1)
             output, error = subprocess.Popen(
                 ['curl', '--silent', 'http://localhost:4040/api/tunnels'],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE
             ).communicate()
+
+            if error:
+                print(f"Error while checking ngrok status: {error.decode('utf-8')}")
+                continue
+
             if output:
                 try:
                     tunnels = json.loads(output.decode('utf-8'))
                     for tunnel in tunnels.get("tunnels", []):
                         if "http" in tunnel["public_url"]:
-                            process.terminate()  # Clean up ngrok process
+                            process.terminate()  # Clean up ngrok process after success
                             return tunnel["public_url"]
                 except (json.JSONDecodeError, KeyError) as e:
                     print(f"Error parsing ngrok response: {e}")
-        process.terminate()
+                    continue
+
+        process.terminate()  # Terminate ngrok if no valid URL found
         print("Timeout waiting for ngrok.")
         return None
+
     except Exception as e:
         print(f"Error starting ngrok: {e}")
         return None

@@ -26,7 +26,7 @@ async def initiate_stk_push(phone_number: str, amount: float, reference: str, db
         access_token = await get_access_token()
         password, timestamp = generate_password()
         
-        print(f"Access Token Retrieved: {access_token}")
+        logging.info(f"Access Token Retrieved: {access_token}")
         
         if not access_token:
             logging.error("Access token was not obtained.")
@@ -51,7 +51,7 @@ async def initiate_stk_push(phone_number: str, amount: float, reference: str, db
             "TransactionDesc": f"Payment for internet Subscription"
         }
         
-        print(f"Payload sent to M-Pesa: {json.dumps(payload, indent=4)}")
+        logging.info(f"Payload sent to M-Pesa: {json.dumps(payload, indent=4)}")
         
         try:
             async with httpx.AsyncClient() as client:
@@ -65,10 +65,10 @@ async def initiate_stk_push(phone_number: str, amount: float, reference: str, db
                 raise HTTPException(status_code=400, detail="Failed to initiate payment")
             
             # Log the successful response
-            print(f"Response after Payload: \n\t{response.json()}")
             #store data
             response_data = response.json()
-            logging.info(f"M-Pesa Response: {response.json()}")
+            logging.info(f"M-Pesa Response: {response.json()}\n")
+            logging.info("Seraching for CheckoutRequestID\n")
             checkout_id = response_data.get('CheckoutRequestID')
             
             if not checkout_id:
@@ -78,13 +78,15 @@ async def initiate_stk_push(phone_number: str, amount: float, reference: str, db
             subscription_id = int(reference)
             
             #STORE IT
-            storeed = store_checkout_request(checkout_id, subscription_id, db=db)
-            if storeed:
+            logging.info(f"initiating store CheckoutID {checkout_id} to Database ...")
+            stored = store_checkout_request(checkout_id, subscription_id, db=db)
+            if stored:
                 logging.info(f"PaymentRecord stored successfully for CheckoutID: {checkout_id}")
             else:
                 logging.error(f"Failed To store Checkot Requestfor CheckoutReaquestID: {checkout_id}")
                 raise HTTPException(status_code=400, detail="Failed to store Checkout ID in database")
             
+            logging.info("Returning STK PUSH response data ...\n")
             return response_data
         
         except requests.exceptions.RequestException as e:
@@ -156,7 +158,7 @@ def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
     Store the M-Pesa checkout request in the database.
     """
     
-    print(f"Storing checkout request - CheckoutID: {checkout_id}, SubscriptionID: {subscription_id}")
+    print(f"Storing checkout request - CheckoutID: {checkout_id}, SubscriptionID: {subscription_id} ...\n")
     
     try:
         payment_record = PaymentRecord(
@@ -167,7 +169,7 @@ def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
         db.add(payment_record)
         db.commit()  # Ensure async commit
         db.refresh(payment_record)
-        print("Payment stored successfully")
+        logging.info("Payment initiation record stored successfully ...\n")
         
         return True
     except Exception as e:

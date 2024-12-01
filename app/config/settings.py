@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     CALLBACK_URL: str = Field(..., env="CALLBACK_URL")
     NGROK_URL: str = Field(..., env="NGROK_URL")
     IPV4_CURRENT: str = Field(..., env="IPV4_CURRENT")
+    AFRICAS_TALKING_API_KEY: str = Field(..., env="AFRICAS_TALKING_API_KEY")
+    AFRICAS_TALKING_USERNAME: str = Field(..., env="AFRICAS_TALKING_USERNAME")
 
     class Config:
         env_file = ".env"

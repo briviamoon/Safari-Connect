@@ -12,7 +12,6 @@ router = APIRouter()
 
 ##########################################
 
-
 ##########################################
 @router.post("/mpesa/callback")
 async def mpesa_callback(request: Request, db: Session = Depends(get_db)):

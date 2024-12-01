@@ -11,6 +11,7 @@ from app.models.subscription import Subscription
 from app.auth.security import SECRET_KEY, create_access_token
 from app.schemas.user import UserCreate, UserLogin
 from app.utils.timezone import utc_to_eat, current_utc_time
+from app.config.settings import settings
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
 import pytz, africastalking, subprocess, logging, platform, uuid, socket
@@ -18,10 +19,10 @@ import pytz, africastalking, subprocess, logging, platform, uuid, socket
 router = APIRouter()
 eat_timezone = pytz.timezone("Africa/Nairobi")
 
-africastalking.initialize(
-    username='sandbox',
-    api_key='atsk_2c126971a075f8c3ed0dbab580d1e4cb7959577587717d23e5fca0b6387104f4e7079690'
-)
+# init Africa's Talking SDK
+username = settings.AFRICAS_TALKING_USERNAME
+api_key = settings.AFRICAS_TALKING_API_KEY
+africastalking.initialize(username, api_key)
 sms = africastalking.SMS
 
 
@@ -44,7 +45,7 @@ async def register_user(request: UserCreate, db: Session = Depends(get_db)):
         store_otp(db, existing_user.phone_number, otp_code)
         logging.info("OTP Stored ...")
         logging.info(f"Sending SMS OTP to user {existing_user.phone_number}")
-        # send_otp_sms(existing_user, otp_code)
+        #send_otp_sms(existing_user, otp_code)
         logging.info(f"OTP sent to {existing_user.phone_number}")
         return {"message": "User already registered. New OTP sent for verification."}
 
@@ -62,7 +63,7 @@ async def register_user(request: UserCreate, db: Session = Depends(get_db)):
         store_otp(db, request.phone_number, otp_code)
         logging.info("OTP Stored ...")
         logging.info("Sending OTP Via SMS ...")
-        # send_otp_sms(request.phone_number, otp_code)
+        #send_otp_sms(request.phone_number, otp_code)
         logging.info("SMS Sent ...")
         return {"message": "Registration initiated. OTP sent for verification."}
     
@@ -86,7 +87,7 @@ async def login_user(phone_number: UserLogin, db: Session = Depends(get_db)):
     otp_code = generate_otp()
     store_otp(db, phone_number, otp_code)
     print(f"Returning OTP:{otp_code}\n")
-    # send_otp_sms(phone_number, otp_code)
+    #send_otp_sms(phone_number, otp_code)
     return {"message": "OTP sent to your phone"}
 
 ########################################

@@ -1,34 +1,101 @@
 let selectedPlan = null;
-let currentUser = null;
+let currentUserData = null;
 let paymentStatusInterval = null;
+let isSubscriptionBeingChecked = false;
+let requestInProgress = false;
+let cancelTokenSource = null;
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
-    const token = localStorage.getItem('authToken');
-    if (token) handleAuthenticatedUser(token);
-    else handleUnauthenticatedUser();
+    clearRedirectionFlag();
+    handleDocumentLoad();
 });
+
+function handleDocumentLoad() {
+    const authToken = localStorage.getItem('authToken');
+    authToken ? handleAuthenticatedUser(authToken) : handleUnauthenticatedUser();
+}
 
 // Handle authenticated users
 function handleAuthenticatedUser(token) {
-    console.log("Retreived token:", token);
-
+    console.log("Retrieved token:", token);
     const decodedToken = decodeJwt(token);
-    const subscriptionChecked = localStorage.getItem('subscriptionChecked');
-    const subscriptionActive = localStorage.getItem('subscriptionActive');
-
     if (!decodedToken || isTokenExpired(decodedToken)) {
         localStorage.removeItem('authToken');
         redirectTo('/user/otp-verification');
         return;
+    } else {
+        currentUserData = decodedToken;
+        handleSubscription();
     }
+}
 
-    currentUser = decodedToken;
+function handleSubscription() {
+    if (isSubscriptionBeingChecked) return;
+
+    const subscriptionChecked = localStorage.getItem('subscriptionChecked') === 'true';
+    const isSubscriptionActive = localStorage.getItem('subscriptionActive') === 'true';
+
     if (!subscriptionChecked) {
-        checkUserSubscription(decodedToken.user_id);
-    } else if (!subscriptionActive && subscriptionChecked) {
+        isSubscriptionBeingChecked = true;
+        checkUserSubscription(currentUserData.user_id)
+            .finally(() => finalizeSubscriptionCheck());
+    } else if (!isSubscriptionActive) {
+        maybeRedirect();
+    }
+}
+
+// Check subscription status
+async function checkUserSubscription(userId) {
+    cancelOngoingRequest();
+    cancelTokenSource = axios.CancelToken.source();
+    try {
+        const response = await axios.get(`${API_BASE_URL}/subscription/subscription-status`, {
+            params: { user_id: userId },
+            headers: getAuthHeaders(),
+            cancelToken: cancelTokenSource.token,
+        });
+        console.log("Subscription Response Data: ", response.data);
+        handleSubscriptionResponse(response);
+    } catch (error) {
+        handleSubscriptionError(error);
+    } finally {
+        finalizeSubscriptionRequest();
+    }
+}
+
+// Function to handle the subscription response
+function handleSubscriptionResponse(response) {
+    const activeSub = response.data.subscription_active;
+    const timeLeft = response.data.time_left;
+    console.log("Subscription state: ", activeSub);
+    console.log("Time left in seconds: ", timeLeft);
+
+    if (activeSub) {
+        clearInterval(paymentStatusInterval);
+        setSubscriptionActive();
+        markSubscriptionChecked();
+        showSessionCountdown(timeLeft);
+    } else {
+        markSubscriptionChecked();
+        maybeRedirect();
+    }
+}
+
+function finalizeSubscriptionCheck() {
+    isSubscriptionBeingChecked = false;
+}
+
+function maybeRedirect() {
+    if (!localStorage.getItem('redirectedOnInactive')) {
+        localStorage.setItem('redirectedOnInactive', 'true');
         redirectTo('/subscription/subscription-success');
     }
+}
+
+// Ensure to clear redirection flag for a fresh start when user state changes
+function clearRedirectionFlag() {
+    localStorage.removeItem('redirectedOnInactive');
 }
 
 // Handle unauthenticated users
@@ -55,8 +122,7 @@ function decodeJwt(token) {
 
 // Check if the token is expired
 function isTokenExpired(decodedToken) {
-    const currentTime = Math.floor(Date.now() / 1000);
-    return decodedToken.exp < currentTime;
+    return Math.floor(Date.now() / 1000) > decodedToken.exp;
 }
 
 // Redirect to a specified path
@@ -65,35 +131,35 @@ function redirectTo(path) {
 }
 
 // MArk subscription check storage as true
-function subIsChecked() {
+function markSubscriptionChecked() {
     localStorage.setItem('subscriptionChecked', true);
 }
 
-function setSubIsActive() {
-    localStorage.setItem('subscriptionActive,', true);
+function setSubscriptionActive() {
+    localStorage.setItem('subscriptionActive', true);
 }
 
-// Check subscription status
-async function checkUserSubscription(userId) {
-    try {
-        const response = await axios.get(`${API_BASE_URL}/subscription/subscription-status`, {
-            params: { user_id: userId },
-            headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` },
-        });
 
-        if (response.data.subscription_active) {
-            subIsChecked();
-            setSubIsActive();
-            showSessionCountdown(response.data.time_left)
-        }
-        else {
-            subIsChecked();
-            redirectTo('/subscription/subscription-success')
-        }
-    } catch (error) {
+function cancelOngoingRequest() {
+    if (cancelTokenSource) {
+        cancelTokenSource.cancel('Operation canceled due to new request.');
+    }
+}
+
+
+function handleSubscriptionError(error) {
+    if (axios.isCancel(error)) {
+        console.log('Request canceled:', error.message);
+    } else {
         console.error("Error checking subscription:", error);
         showError("Failed to verify subscription. Please try again.");
     }
+}
+
+function finalizeSubscriptionRequest() {
+    cancelTokenSource = null;
+    isSubscriptionBeingChecked = false;
+    clearInterval(paymentStatusInterval);
 }
 
 // Initialize the registration page
@@ -101,23 +167,29 @@ function initRegisterPage() {
     const form = document.querySelector('form');
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
-        const phone = document.getElementById('phone').value;
-        const macAddress = await getMacAddress();
-
-        try {
-            const response = await axios.post(`${API_BASE_URL}/user/register`, { phone_number: phone, mac_address: macAddress });
-            localStorage.setItem('phone_number', phone);
-            redirectTo('/user/otp-verification');
-        } catch (error) {
-            console.error("Registration failed:", error);
-            showError("Registration failed. Please try again.");
-        }
+        await registerUser();
     });
+}
+
+async function registerUser() {
+    const phone = document.getElementById('phone').value;
+    const macAddress = await getMacAddress();
+    try {
+        const response = await axios.post(`${API_BASE_URL}/user/register`, {
+            phone_number: phone,
+            mac_address: macAddress
+        });
+        localStorage.setItem('phone_number', phone);
+        redirectTo('/user/otp-verification');
+    } catch (error) {
+        console.error("Registration failed:", error);
+        showError("Registration failed. Please try again.");
+    }
 }
 
 //Subscribe action
 document.addEventListener("DOMContentLoaded", function () {
-    if (window.location.href == "subscription/subscription-success") {
+    if (window.location.pathname == "subscription/subscription-success") {
         const planCards = document.querySelectorAll(".plan-card");
         const subscribeButton = document.getElementById("subscribeBtn");
 
@@ -178,7 +250,7 @@ async function subscribe(selectedPlan) {
         let timeLeft = 0;
         timeLeft += additionalTime;
 
-        
+
         if (response.data && response.data.message) {
             showSuccess(response.data.message);
         } else {
@@ -209,8 +281,12 @@ function getAuthHeaders() {
 
 // Start polling every 5 seconds after initiating payment
 function startPaymentStatusPolling() {
-    if (paymentStatusInterval) clearInterval(paymentStatusInterval);
-    paymentStatusInterval = setInterval(checkUserSubscription, 5000);
+    if (paymentStatusInterval) {
+        clearInterval(paymentStatusInterval);
+    }
+    if (!isCheckingSubscription) {
+        paymentStatusInterval = setInterval(checkUserSubscription, 5000);
+    }
 }
 
 // Fetch MAC address from the backend
@@ -245,7 +321,7 @@ function initOTPPage() {
             });
             const { access_token, message } = response.data;
             localStorage.setItem("authToken", access_token);
-            redirectTo("/");
+            redirectTo('/');
         } catch (error) {
             console.error("OTP verification failed:", error);
             showError("Invalid OTP. Please try again.");

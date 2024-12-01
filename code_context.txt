@@ -1,9 +1,8 @@
 // File: app/auth/deps.py
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+from jose import jwt, JWTError
 from sqlalchemy.orm import Session
-
 from app.config.database import get_db
 from app.models.user import User
 from app.auth.security import SECRET_KEY, ALGORITHM
@@ -11,56 +10,98 @@ from app.auth.security import SECRET_KEY, ALGORITHM
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    """
+    Decodes JWT token and retrieves the current user from the database.
+    """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        user = db.query(User).filter_by(username=username).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        return user
+
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token has expired")
-    except JWTError:
-        raise credentials_exception
-    
-    print(f"Decoded JWT Payload: {payload}")
-    user = db.query(User).filter(User.username == username).first()
-    if user:
-        print(f"User found: {user.id}")
-    else:
-        raise credentials_exception
-    return user
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    except JWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"JWT decoding failed: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
 
 
 // File: app/auth/security.py
 from datetime import datetime, timedelta
-import jwt
+import logging
 from app.config.settings import settings
-from app.utils.timezone import current_utc_time, utc_to_eat
+from app.utils.timezone import current_utc_time
+from fastapi import HTTPException, status
+from jose import JWTError, jwt
 
-
-# shields
 SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # Token expiration time in minutes
 
-def create_access_token(data: dict):
-    """Generates access token with set expiry time,
-    encryption algorythm and secret key"""
-    to_encode = data.copy()
-    expire = current_utc_time()  + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+def create_access_token(data: dict) -> str:
+    """
+    Create a JWT access token with an expiration time.
+    """
+    try:
+        logging.info("encoding User Data ...")
+        to_encode = data.copy()
+        logging.info("setting Expiry time ...")
+        expire = current_utc_time() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        logging.info(f"Expiry set to: {expire}")
+        logging.info("Updating data with expiration time")
+        to_encode.update({"exp": expire})
+        logging.info("updated data with expiration time ...")
+        logging.info("encoding User Data to Session Token ...")
+        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+        logging.info(f"Encoded token is now: {encoded_jwt}")
+        return encoded_jwt
+    except Exception as e:
+        logging.error(f"Error creating token: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating token: {str(e)}",
+        )
+
 
 def verify_token(token: str):
-    """sends back the decoded token data"""
+    """
+    Verify a JWT token and return the decoded payload.
+    """
     try:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except jwt.JWTError:
-        return None
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+        )
+    except JWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"JWT decoding failed: {str(e)}",
+        )
 
 
 
@@ -68,30 +109,43 @@ def verify_token(token: str):
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+import logging
+
 from app.config.settings import settings
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 DATABASE_URL = settings.DATABASE_URL
-engine = create_engine(DATABASE_URL)
+
+# Database engine and session
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# create db
-def create_database():
-    """Ensuring the tables are created only once"""
-try:
-    inspector = inspect(engine)
-    existing_tables = inspector.get_table_names()
-    if not existing_tables:  # Check if tables already exist
-        print("Setting up database tables...")
-        Base.metadata.create_all(bind=engine)
-        print("Tables created.")
-    else:
-        print(f"Database tables already exist: {existing_tables}. Skipping creation")
-except Exception as e:
-    print(f"Database connection failed: {e}")
+def init_database():
+    """
+    Initialize the database by creating tables if they don't exist.
+    """
+    try:
+        inspector = inspect(engine)
+        existing_tables = inspector.get_table_names()
+        if not existing_tables:
+            logger.info("Creating database tables...")
+            Base.metadata.create_all(bind=engine)
+            logger.info("Database initialized successfully.")
+        else:
+            logger.info(f"Tables already exist: {existing_tables}. Skipping creation.")
+    except Exception as e:
+        logger.error(f"Error initializing the database: {e}")
+        raise
 
-# the dependency
+# Database dependency
 def get_db():
+    """
+    Provide a transactional scope around a series of operations.
+    """
     db = SessionLocal()
     try:
         yield db
@@ -100,44 +154,55 @@ def get_db():
 
 
 
-
 // File: app/config/settings.py
 from pydantic_settings import BaseSettings
+from pydantic import Field, ValidationError
 
-# environment variables
+
+# noinspection PyArgumentList
 class Settings(BaseSettings):
-    SECRET_KEY: str
-    DATABASE_URL: str
-    M_PESA_CONSUMER_KEY: str  # Changed from MPESA_CONSUMER_KEY
-    M_PESA_CONSUMER_SECRET: str  # Changed from MPESA_CONSUMER_SECRET
-    M_PESA_PASSKEY: str  # Changed from MPESA_PASSKEY
-    M_PESA_SHORTCODE: str  # Changed from MPESA_SHORTCODE
-    CALLBACK_URL: str
-    NGROK_URL: str
+    """
+    Application settings loaded from environment variables.
+    Provides default values and validation for critical settings.
+    """
+    SECRET_KEY: str = Field(..., env="SECRET_KEY")
+    DATABASE_URL: str = Field(..., env="DATABASE_URL")
+    M_PESA_CONSUMER_KEY: str = Field(..., env="M_PESA_CONSUMER_KEY")
+    M_PESA_CONSUMER_SECRET: str = Field(..., env="M_PESA_CONSUMER_SECRET")
+    M_PESA_PASSKEY: str = Field(..., env="M_PESA_PASSKEY")
+    M_PESA_SHORTCODE: str = Field(..., env="M_PESA_SHORTCODE")
+    CALLBACK_URL: str = Field(..., env="CALLBACK_URL")
+    NGROK_URL: str = Field(..., env="NGROK_URL")
+    IPV4_CURRENT: str = Field(..., env="IPV4_CURRENT")
+    AFRICAS_TALKING_API_KEY: str = Field(..., env="AFRICAS_TALKING_API_KEY")
+    AFRICAS_TALKING_USERNAME: str = Field(..., env="AFRICAS_TALKING_USERNAME")
 
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
 
-settings = Settings()
-
-# print("Available environment variables:", os.environ.keys())
+try:
+    settings = Settings()
+except ValidationError as e:
+    print("Configuration Error: Ensure all required environment variables are set.")
+    print(e.json())
+    raise
 
 
 
 // File: app/main.py
-from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.security import OAuth2PasswordBearer
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-from app.config.database import create_database
+
+from fastapi import FastAPI, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from app.auth.deps import get_current_user
+from app.config.database import init_database
+from app.config.settings import settings
 from app.middleware.ip_whitelist import allow_ip_middleware
 from app.routes import user, subscription, payment, mac_address
-from app.config.settings import settings
-from app.auth.deps import get_current_user
-import jwt
 
 app = FastAPI()
 
@@ -145,13 +210,16 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
+NGROK_URL = settings.NGROK_URL
+ALLOWED_METHODS = ["*"]
+ALLOWED_HEADERS = ["*"]
 # Configure CORS settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[f"{NGROK_URL}"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods= ALLOWED_METHODS,
+    allow_headers= ALLOWED_HEADERS,
 )
 
 # Middlewares
@@ -164,12 +232,21 @@ app.include_router(payment.router, prefix="/payment", tags=["Payment"])
 app.include_router(mac_address.router, prefix="/mac_address", tags=["MAC Address"])
 
 # Init Db
-create_database()
+init_database()
+
+
+@app.options("/mac_address/{mac_address}")
+async def handle_options():
+    return {"message": "CORS preflight request handled"}
+
 
 # root of app
 @app.get("/")
 async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "ngrok_url": settings.NGROK_URL})
+    ngrok_url = settings.NGROK_URL
+    ipv4_url = settings.IPV4_CURRENT
+    print(f"Serving NgrokURL as API BASE: {ngrok_url}\n")
+    return templates.TemplateResponse("index.html", {"request": request, "skibidi": ngrok_url, "rizz": ipv4_url})
 
 # Check on the Session Token
 # dependency function when I need a user session validated
@@ -177,6 +254,7 @@ async def home(request: Request):
 @app.get("/protected-endpoint")
 async def protected_route(user:dict = Depends(get_current_user)):
     return {"message": "Access granted", "user": user}
+
 
 
 
@@ -271,7 +349,7 @@ class User(Base):
     phone_number = Column(String, unique=True, index=True)
     mac_address = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
-    is_active = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=False)
 
 
 
@@ -409,7 +487,6 @@ router = APIRouter()
 
 
 ##########################################
-
 
 ##########################################
 @router.post("/mpesa/callback")
@@ -620,24 +697,34 @@ async def create_subscription(request: SubscriptionCreate, db: Session = Depends
 #creating a subscription status checker
 @router.get("/subscription-status")
 async def subscription_status(user_id: int, db: Session = Depends(get_db)):
-    print(f"checking subscription status for user: {user_id}")
-    subscription = db.query(Subscription).filter(
-        Subscription.user_id == user_id,
-        Subscription.is_active == True
-    ).first()
-    logging.info(f"subscription for {subscription.user_id} is {subscription.is_active}\n")
-
-    # Calculate time left in seconds if there's an active subscription
-    if subscription:
-        # Ensure `end_time` is timezone-aware
-        if subscription.end_time.tzinfo is None:
-            subscription.end_time = subscription.end_time.replace(tzinfo=timezone.utc)
-        
-        time_left = (subscription.end_time - current_utc_time()).total_seconds()
-        logging.info(f"Time left for user {user_id}: {time_left} seconds")
-        return {"subscription_active": True, "time_left": max(time_left, 0)}
+    print(f"Checking subscription status for user: {user_id}")
     
-    # Return inactive status if no subscription found
+    # Query the subscription record for the given user_id
+    subscription = db.query(Subscription).filter(Subscription.user_id == user_id).first()
+    
+    if not subscription:
+        logging.info(f"No subscription found for user {user_id}")
+        return {"subscription_active": False, "time_left": 0}
+
+    logging.info(f"Subscription for user {subscription.user_id} is {'active' if subscription.is_active else 'inactive'}")
+    
+    # If the subscription is active, calculate the time left
+    if subscription.is_active:
+        if subscription.end_time:
+            # Ensure `end_time` is timezone-aware
+            if subscription.end_time.tzinfo is None:
+                subscription.end_time = subscription.end_time.replace(tzinfo=timezone.utc)
+            
+            # Calculate time left in seconds
+            time_left = (subscription.end_time - current_utc_time()).total_seconds()
+            logging.info(f"Time left for user {user_id}: {time_left} seconds")
+            return {"subscription_active": True, "time_left": max(time_left, 0)}
+
+        # Handle case where `end_time` is None or invalid
+        logging.warning(f"Subscription for user {user_id} has no valid end_time")
+        return {"subscription_active": True, "time_left": 0}
+    
+    # If subscription is inactive
     return {"subscription_active": False, "time_left": 0}
 
 
@@ -690,60 +777,66 @@ from app.models.subscription import Subscription
 from app.auth.security import SECRET_KEY, create_access_token
 from app.schemas.user import UserCreate, UserLogin
 from app.utils.timezone import utc_to_eat, current_utc_time
+from app.config.settings import settings
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
-import pytz, africastalking, jwt, subprocess, logging, platform, uuid, socket
+import pytz, africastalking, subprocess, logging, platform, uuid, socket
 
 router = APIRouter()
 eat_timezone = pytz.timezone("Africa/Nairobi")
 
-africastalking.initialize(
-    username='sandbox',
-    api_key='atsk_2c126971a075f8c3ed0dbab580d1e4cb7959577587717d23e5fca0b6387104f4e7079690'
-)
+# init Africa's Talking SDK
+username = settings.AFRICAS_TALKING_USERNAME
+api_key = settings.AFRICAS_TALKING_API_KEY
+africastalking.initialize(username, api_key)
 sms = africastalking.SMS
 
 
 ########################################
-# register user
+# User Registration
 @router.post("/register")
 async def register_user(request: UserCreate, db: Session = Depends(get_db)):
-    # Check if the user already exists
-    print("Regisering User\n")
+    """
+    Register a new user and send OTP for verification.
+    """
+    logging.info("Registering User")
     existing_user = db.query(User).filter(User.phone_number == request.phone_number).first()
+
     if existing_user:
-        # Resend OTP for the existing user
-        print("Calling OTP Verification\n")
+        logging.info(f"existing user found in database: {existing_user.phone_number}")
+        logging.info("generating new otp ...")
         otp_code = generate_otp()
-        print(f"YOUR OTP: {otp_code}")
-        store_otp(db, request.phone_number, otp_code)
-        send_otp_sms(request.phone_number, otp_code)
+        logging.info(f"{existing_user.phone_number} OTP: {otp_code}")
+        logging.info("Storing otp to database ...")
+        store_otp(db, existing_user.phone_number, otp_code)
+        logging.info("OTP Stored ...")
+        logging.info(f"Sending SMS OTP to user {existing_user.phone_number}")
+        #send_otp_sms(existing_user, otp_code)
+        logging.info(f"OTP sent to {existing_user.phone_number}")
         return {"message": "User already registered. New OTP sent for verification."}
-    else:
-        print("Database issues\n")
 
-    # If user does not exist, proceed to create a new entry
     try:
+        logging.info(f"User not in database ... Adding user: {request.phone_number}")
         user = User(phone_number=request.phone_number, mac_address=request.mac_address)
-        with db.begin():
-            db.add(user)
-            db.commit()
-
-        # Generate and send OTP for the new registration
+        db.add(user)
+        logging.info("commit to database ...")
+        db.commit()
+        
+        logging.info("Generating OTP ...")
         otp_code = generate_otp()
-        print(f"otp: {otp_code}")
-        logging.info(f"OTP for {request.phone_number}: {otp_code}")
+        logging.info(f"New User {request.phone_number} OTP: {otp_code}")
+        logging.info("Storing OTP ...")
         store_otp(db, request.phone_number, otp_code)
-        send_otp_sms(request.phone_number, otp_code)
-
+        logging.info("OTP Stored ...")
+        logging.info("Sending OTP Via SMS ...")
+        #send_otp_sms(request.phone_number, otp_code)
+        logging.info("SMS Sent ...")
         return {"message": "Registration initiated. OTP sent for verification."}
-    except IntegrityError as e:
-        db.rollback()
-        logging.error(f"IntegrityError while adding user {request.phone_number}: {e}")
-        raise HTTPException(status_code=400, detail="User already exists or registration failed.")
+    
     except Exception as e:
-        logging.error(f"Unexpected error during user registration: {e}")
+        logging.error(f"Error during user registration: {e}")
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+
 ####################################################
 
 # RETURNING USERS #
@@ -760,7 +853,7 @@ async def login_user(phone_number: UserLogin, db: Session = Depends(get_db)):
     otp_code = generate_otp()
     store_otp(db, phone_number, otp_code)
     print(f"Returning OTP:{otp_code}\n")
-    send_otp_sms(phone_number, otp_code)
+    #send_otp_sms(phone_number, otp_code)
     return {"message": "OTP sent to your phone"}
 
 ########################################
@@ -850,15 +943,16 @@ async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
         session_data = {
             "sub": user.phone_number,
             "message": "Welcome back!",
-            "subscription_active": False,
+            "subscription_active": user.is_active,
             "user_id": user.id
         }
         logging.info(f"No active subscription found for user {user.id}.")
 
     # Generate and return token
+    logging.info("generating user access token ...")
     token = create_access_token(session_data)
     logging.info(f"Token generated for user {user.id}.")
-    return {"token": token, "message": session_data["message"]}
+    return {"access_token": token, "message": session_data["message"]}
 
 #######################################
 
@@ -885,15 +979,33 @@ def generate_otp():
 
 
 #Store OTP in Database
-def store_otp(db: Session, phone_number: str, otp_code: str):
-    otp = OTP(phone_number=phone_number, otp_code=otp_code, is_used=False, created_at=current_utc_time())
-    db.add(otp)
-    db.commit()
+def store_otp(db, phone_number: str, otp_code: str):
+    """
+    store the generated otp to db forspecific number
+    """
+    try:
+        otp = OTP(
+            phone_number=phone_number, 
+            otp_code=otp_code, 
+            is_used=False, 
+            created_at=current_utc_time(), 
+        )
+        db.add(otp)
+        db.commit()
+        logging.info("CONFIRMED: OTP STORED SUCCESS ...")
+    except Exception as e:
+        db.rollback()
+        print(f"Error storing OTP: {e}")
+        raise
 
 
 #Send OTP SMS
 def send_otp_sms(phone_number: str, otp_code: str):
-    message = f"Your OTP code is: {otp_code}"
+    logging.info(f"Trying to send OTP: {otp_code} ...")
+    message = f"""
+    Thank you for choosing Safariconnect 
+    Your one time OTP code is: {otp_code}
+    """
     try:
         response = sms.send(message, [phone_number])
         return response
@@ -1036,7 +1148,7 @@ async def initiate_stk_push(phone_number: str, amount: float, reference: str, db
         access_token = await get_access_token()
         password, timestamp = generate_password()
         
-        print(f"Access Token Retrieved: {access_token}")
+        logging.info(f"Access Token Retrieved: {access_token}")
         
         if not access_token:
             logging.error("Access token was not obtained.")
@@ -1061,7 +1173,7 @@ async def initiate_stk_push(phone_number: str, amount: float, reference: str, db
             "TransactionDesc": f"Payment for internet Subscription"
         }
         
-        print(f"Payload sent to M-Pesa: {json.dumps(payload, indent=4)}")
+        logging.info(f"Payload sent to M-Pesa: {json.dumps(payload, indent=4)}")
         
         try:
             async with httpx.AsyncClient() as client:
@@ -1075,10 +1187,10 @@ async def initiate_stk_push(phone_number: str, amount: float, reference: str, db
                 raise HTTPException(status_code=400, detail="Failed to initiate payment")
             
             # Log the successful response
-            print(f"Response after Payload: \n\t{response.json()}")
             #store data
             response_data = response.json()
-            logging.info(f"M-Pesa Response: {response.json()}")
+            logging.info(f"M-Pesa Response: {response.json()}\n")
+            logging.info("Seraching for CheckoutRequestID\n")
             checkout_id = response_data.get('CheckoutRequestID')
             
             if not checkout_id:
@@ -1088,13 +1200,15 @@ async def initiate_stk_push(phone_number: str, amount: float, reference: str, db
             subscription_id = int(reference)
             
             #STORE IT
-            storeed = store_checkout_request(checkout_id, subscription_id, db=db)
-            if storeed:
+            logging.info(f"initiating store CheckoutID {checkout_id} to Database ...")
+            stored = store_checkout_request(checkout_id, subscription_id, db=db)
+            if stored:
                 logging.info(f"PaymentRecord stored successfully for CheckoutID: {checkout_id}")
             else:
                 logging.error(f"Failed To store Checkot Requestfor CheckoutReaquestID: {checkout_id}")
                 raise HTTPException(status_code=400, detail="Failed to store Checkout ID in database")
             
+            logging.info("Returning STK PUSH response data ...\n")
             return response_data
         
         except requests.exceptions.RequestException as e:
@@ -1166,7 +1280,7 @@ def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
     Store the M-Pesa checkout request in the database.
     """
     
-    print(f"Storing checkout request - CheckoutID: {checkout_id}, SubscriptionID: {subscription_id}")
+    print(f"Storing checkout request - CheckoutID: {checkout_id}, SubscriptionID: {subscription_id} ...\n")
     
     try:
         payment_record = PaymentRecord(
@@ -1177,7 +1291,7 @@ def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
         db.add(payment_record)
         db.commit()  # Ensure async commit
         db.refresh(payment_record)
-        print("Payment stored successfully")
+        logging.info("Payment initiation record stored successfully ...\n")
         
         return True
     except Exception as e:
@@ -1186,764 +1300,373 @@ def store_checkout_request(checkout_id: str, subscription_id: int, db: Session):
 
 
 // File: app/static/index.js
-const API_BASE_URL = "{{ ngrok_url }}";
-console.log("API Base URL:", API_BASE_URL);
 let selectedPlan = null;
-let currentUser = null;
+let currentUserData = null;
 let paymentStatusInterval = null;
-let countdownInterval = null;
+let isSubscriptionBeingChecked = false;
+let requestInProgress = false;
+let cancelTokenSource = null;
 
+// Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("Document loaded, checking for authentication token...");
-    const token = localStorage.getItem('authToken');
-    const path = window.location.pathname;
+    clearRedirectionFlag();
+    handleDocumentLoad();
+});
 
-    if (token) {
-        console.log("Token found. Decoding...");
-        const decodedToken = decodeJwt(token);
+function handleDocumentLoad() {
+    const authToken = localStorage.getItem('authToken');
+    authToken ? handleAuthenticatedUser(authToken) : handleUnauthenticatedUser();
+}
 
-        if (!decodedToken) {
-            console.error("Failed to decode token. Redirecting to OTP verification...");
-            localStorage.removeItem('authToken');
-            window.location.href = '/user/otp-verification';
-            return;
-        }
-
-        console.log("Decoded Token:", decodedToken);
-
-        if (isTokenExpired(decodedToken)) {
-            console.warn("Token is expired. Removing token and redirecting to OTP verification...");
-            localStorage.removeItem('authToken');
-            window.location.href = '/user/otp-verification';
-        } else {
-            console.log("Token is valid. Proceeding with user session...");
-            currentUser = decodedToken;
-            checkUserSubscription(decodedToken);
-        }
+// Handle authenticated users
+function handleAuthenticatedUser(token) {
+    console.log("Retrieved token:", token);
+    const decodedToken = decodeJwt(token);
+    if (!decodedToken || isTokenExpired(decodedToken)) {
+        localStorage.removeItem('authToken');
+        redirectTo('/user/otp-verification');
+        return;
     } else {
-        console.warn("No token found. Handling paths for unauthenticated user...");
-        if (path === "/") {
-            console.log("Initializing registration page...");
-            initRegisterPage();
-        } else if (path === "/user/otp-verification") {
-            console.log("Initializing OTP verification page...");
-            initOTPPage();
-        } else {
-            console.error("Unhandled path for unauthenticated user. Redirecting to registration...");
-            window.location.href = '/';
+        currentUserData = decodedToken;
+        handleSubscription();
+    }
+}
+
+function handleSubscription() {
+    if (isSubscriptionBeingChecked) return;
+
+    const subscriptionChecked = localStorage.getItem('subscriptionChecked') === 'true';
+    const isSubscriptionActive = localStorage.getItem('subscriptionActive') === 'true';
+
+    if (!subscriptionChecked) {
+        isSubscriptionBeingChecked = true;
+        checkUserSubscription(currentUserData.user_id)
+            .finally(() => finalizeSubscriptionCheck());
+    } else if (!isSubscriptionActive) {
+        maybeRedirect();
+    }
+}
+
+// Check subscription status
+async function checkUserSubscription(userId) {
+    cancelOngoingRequest();
+    cancelTokenSource = axios.CancelToken.source();
+    try {
+        const response = await axios.get(`${API_BASE_URL}/subscription/subscription-status`, {
+            params: { user_id: userId },
+            headers: getAuthHeaders(),
+            cancelToken: cancelTokenSource.token,
+        });
+        console.log("Subscription Response Data: ", response.data);
+        handleSubscriptionResponse(response);
+    } catch (error) {
+        handleSubscriptionError(error);
+    } finally {
+        finalizeSubscriptionRequest();
+    }
+}
+
+// Function to handle the subscription response
+function handleSubscriptionResponse(response) {
+    const activeSub = response.data.subscription_active;
+    const timeLeft = response.data.time_left;
+    console.log("Subscription state: ", activeSub);
+    console.log("Time left in seconds: ", timeLeft);
+
+    if (activeSub) {
+        clearInterval(paymentStatusInterval);
+        setSubscriptionActive();
+        markSubscriptionChecked();
+        showSessionCountdown(timeLeft);
+    } else {
+        markSubscriptionChecked();
+        maybeRedirect();
+    }
+}
+
+function finalizeSubscriptionCheck() {
+    isSubscriptionBeingChecked = false;
+}
+
+function maybeRedirect() {
+    if (!localStorage.getItem('redirectedOnInactive')) {
+        localStorage.setItem('redirectedOnInactive', 'true');
+        redirectTo('/subscription/subscription-success');
+    }
+}
+
+// Ensure to clear redirection flag for a fresh start when user state changes
+function clearRedirectionFlag() {
+    localStorage.removeItem('redirectedOnInactive');
+}
+
+// Handle unauthenticated users
+function handleUnauthenticatedUser() {
+    const path = window.location.pathname;
+    if (path === "/") initRegisterPage();
+    else if (path === "/user/otp-verification") initOTPPage();
+    else redirectTo('/');
+}
+
+// Decode JWT token
+function decodeJwt(token) {
+    try {
+        if (!token || typeof token !== "string") {
+            throw new Error("Invalid token");
         }
+        const payload = atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"));
+        return JSON.parse(payload);
+    } catch (error) {
+        console.error("Invalid JWT token:", error);
+        return null; // Return null for invalid tokens
+    }
+}
+
+// Check if the token is expired
+function isTokenExpired(decodedToken) {
+    return Math.floor(Date.now() / 1000) > decodedToken.exp;
+}
+
+// Redirect to a specified path
+function redirectTo(path) {
+    window.location.href = path;
+}
+
+// MArk subscription check storage as true
+function markSubscriptionChecked() {
+    localStorage.setItem('subscriptionChecked', true);
+}
+
+function setSubscriptionActive() {
+    localStorage.setItem('subscriptionActive', true);
+}
+
+
+function cancelOngoingRequest() {
+    if (cancelTokenSource) {
+        cancelTokenSource.cancel('Operation canceled due to new request.');
+    }
+}
+
+
+function handleSubscriptionError(error) {
+    if (axios.isCancel(error)) {
+        console.log('Request canceled:', error.message);
+    } else {
+        console.error("Error checking subscription:", error);
+        showError("Failed to verify subscription. Please try again.");
+    }
+}
+
+function finalizeSubscriptionRequest() {
+    cancelTokenSource = null;
+    isSubscriptionBeingChecked = false;
+    clearInterval(paymentStatusInterval);
+}
+
+// Initialize the registration page
+function initRegisterPage() {
+    const form = document.querySelector('form');
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        await registerUser();
+    });
+}
+
+async function registerUser() {
+    const phone = document.getElementById('phone').value;
+    const macAddress = await getMacAddress();
+    try {
+        const response = await axios.post(`${API_BASE_URL}/user/register`, {
+            phone_number: phone,
+            mac_address: macAddress
+        });
+        localStorage.setItem('phone_number', phone);
+        redirectTo('/user/otp-verification');
+    } catch (error) {
+        console.error("Registration failed:", error);
+        showError("Registration failed. Please try again.");
+    }
+}
+
+//Subscribe action
+document.addEventListener("DOMContentLoaded", function () {
+    if (window.location.pathname == "subscription/subscription-success") {
+        const planCards = document.querySelectorAll(".plan-card");
+        const subscribeButton = document.getElementById("subscribeBtn");
+
+        // Handle plan card selection
+        planCards.forEach(function (card) {
+            card.addEventListener("click", function () {
+                // Deselect other cards
+                planCards.forEach(card => card.classList.remove("selected"));
+                // Mark the clicked card as selected
+                card.classList.add("selected");
+                // Show the subscribe button
+                subscribeButton.classList.remove("hidden");
+            });
+        });
+
+        // Handle subscribe button click
+        subscribeButton.addEventListener("click", async function () {
+            const selectedPlan = document.querySelector(".plan-card.selected");
+
+            if (selectedPlan) {
+                const planName = selectedPlan.getAttribute("data-plan");
+                console.log("User selected plan:", planName);
+
+                // Send subscription request to the backend
+                await subscribe(planName);
+            } else {
+                console.log("Please select a plan first.");
+            }
+        });
     }
 });
 
-// Utility: Decode JWT to access session data
-function decodeJwt(token) {
-    try {
-        const base64Url = token.split('.')[1];
-        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-        const decoded = JSON.parse(atob(base64));
-        console.log("Successfully decoded JWT:", decoded);
-        return decoded;
-    } catch (error) {
-        console.error("Error decoding JWT:", error);
-        return null;
-    }
-}
-
-// Utility: Check if token is expired
-function isTokenExpired(decodedToken) {
-    console.log("Checking token expiry...");
-    if (!decodedToken || !decodedToken.exp) return true;
-    const currentTime = Math.floor(Date.now() / 1000);
-    console.log(`Token expiry time: ${decodedToken.exp}, current time: ${currentTime}`);
-    return decodedToken.exp < currentTime;
-}
-
-// Helper to get auth headers with token
-function getAuthHeaders() {
-    const token = localStorage.getItem('authToken');
-    if (!token) {
-        console.warn("No auth token found. Redirecting to OTP verification...");
-        window.location.href = '/user/otp-verification';
-        return null;
-    }
-    return { headers: { Authorization: `Bearer ${token}` } };
-}
-
-// Check user's subscription status by calling the backend
-async function checkUserSubscription(decodedToken) {
-    console.log("Checking user subscription status...");
-    try {
-        const response = await axios.get(`${API_BASE_URL}/user/check-subscription`, {
-            params: { user_id: decodedToken.user_id },
-            headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` }
-        });
-
-        console.log("Response:", response);
-
-        if (typeof response.data !== 'object') {
-            console.error("Unexpected response format. Received non-JSON response:", response);
-            showError("Failed to check subscription status. Please try again later.");
-            return;
-        }
-
-        console.log("Subscription status response:", response.data);
-
-        if (response.data.subscription_active) {
-            console.log("User has an active subscription. Redirecting to countdown page...");
-            showSessionCountdown(response.data.time_left);
-        } else {
-            // Prevent redirect loop if already on the subscription page
-            if (window.location.pathname !== '/subscription/subscription-success') {
-                console.log("User does not have an active subscription. Redirecting to subscription page...");
-                window.location.href = '/subscription/subscription-success';
-            } else {
-                console.log("Already on the subscription page, not redirecting.");
-                initSubscriptionPage();
-            }
-        }
-    } catch (error) {
-        console.error("Error while checking subscription status:", error);
-        showError("Failed to check subscription status. Please try again.");
-    }
-}
-
-
-
-
-// 1. Registration and MAC Retrieval
-async function initRegisterPage() {
-    document.querySelector('form').addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const phone = document.getElementById('phone').value;
-        console.log("Form submitted. Phone number entered:", phone);
-        const macAddress = await getMacAddress();
-
-        try {
-            console.log("Sending registration request...");
-            const response = await axios.post(`${API_BASE_URL}/user/register`, { phone_number: phone, mac_address: macAddress });
-            if (response) {
-                console.log("Registration successful:", response.data);
-                showSuccess(response.data.message || "Registered successfully");
-                localStorage.setItem('phone_number', phone);
-                setTimeout(5000);
-                window.location.href = '/user/otp-verification';
-            }
-            else {
-                console.log("couldn't get response from server\n");
-            }
-        } catch (error) {
-            console.error("Registration failed:", error.response ? error.response.data : error.message);
-            showError("Registration failed. Please try again.");
-        }
-    });
-}
-
-// Get MAC Address from backend
-async function getMacAddress() {
-    try {
-        console.log("Fetching MAC address from backend...");
-        const response = await axios.get(`${API_BASE_URL}/mac_address/mac-address`, getAuthHeaders());
-        console.log("MAC address retrieved:", response.data.mac_address);
-        return response.data.mac_address || "MAC not found";
-    } catch (error) {
-        console.error("Error retrieving MAC address:", error);
-        return "Error retrieving MAC";
-    }
-}
-
-// 2. OTP Verification and Store Token
-async function initOTPPage() {
-    const otpForm = document.getElementById('otp-form');
-    if (otpForm) {
-        otpForm.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const otp = document.getElementById('otp').value;
-            const phone = localStorage.getItem('phone_number');
-            console.log("OTP form submitted. OTP entered:", otp);
-
-            if (!phone) {
-                console.error("Phone number is missing from local storage.");
-                showError("Phone number is missing. Please register again.");
-                window.location.href = '/';
-                return;
-            }
-
-            try {
-                console.log("Sending OTP verification request...");
-                const { data } = await axios.post(`${API_BASE_URL}/user/verify-otp`, { phone_number: phone, otp_code: otp });
-                console.log("OTP verified successfully:", data);
-                handleOtpSuccess(data);
-            } catch (error) {
-                console.error("OTP verification failed:", error.response ? error.response.data : error.message);
-                handleOtpError(error);
-            }
-        });
-    }
-}
-
-function handleOtpSuccess(data) {
-    const { token, message } = data;
-    if (token) {
-        console.log("Storing new auth token and redirecting...");
-        localStorage.setItem('authToken', token);
-        showSuccess(message || "OTP verified successfully");
-        const decodedUser = decodeJwt(token);
-        window.location.href = decodedUser.subscription_active ? '/countdown' : '/subscription/subscription-success';
-    } else {
-        console.warn("No token received from OTP verification.");
-    }
-}
-
-function handleOtpError(error) {
-    console.error("Handling OTP error...");
-    showError("Invalid OTP. Please try again.");
-}
-
-// 3. Subscription Page Initialization
-function initSubscriptionPage() {
-    console.log("Initializing subscription page...");
-    document.querySelectorAll('.plan-card').forEach(card => {
-        card.addEventListener('click', (event) => selectPlan(event, card.getAttribute('data-plan')));
-    });
-    document.getElementById('subscribeBtn').addEventListener('click', subscribe);
-}
-
-// Subscription Plan Selection
-function selectPlan(event, plan) {
-    console.log(`Plan selected: ${plan}`);
-    selectedPlan = plan;
-    document.querySelectorAll('.plan-card').forEach(card => card.classList.remove('selected'));
-    event.currentTarget.classList.add('selected');
-    document.getElementById('subscribeBtn').classList.remove('hidden');
-}
-
-// 4. Subscribe to Plan with Authenticated Request
-async function subscribe() {
+// Function to send the subscription request to the backend
+async function subscribe(selectedPlan) {
     if (!selectedPlan) {
         showError("Please select a subscription plan.");
-        console.warn("Subscription attempt without selecting a plan.");
         return;
     }
+
     if (!currentUser || !currentUser.user_id) {
-        showError("User information is missing. Please verify your OTP.");
-        console.error("User data is missing during subscription attempt:", currentUser);
+        showError("User information is missing. Please try re-verifying your OTP.");
         return;
     }
 
     try {
-        console.log("Sending subscription request...");
-        const response = await axios.post(
-            `${API_BASE_URL}/subscription/subscribe`,
-            { user_id: currentUser.user_id, plan_type: selectedPlan },
-            getAuthHeaders()
-        );
-        console.log("Subscription initiated successfully:", response.data);
-        showSuccess(response.data.message || "Subscription initiated. Please complete payment on your phone.");
-        startPaymentStatusPolling();
-    } catch (error) {
-        console.error("Subscription request failed:", error.response ? error.response.data : error.message);
-        showError("Subscription failed. Please try again.");
-    }
-}
+        const requestData = {
+            user_id: currentUser.user_id,
+            plan_type: selectedPlan
+        };
+        console.log("Subscription request data:", requestData);
 
-// 5. Poll Payment Status until Successful
-async function checkPaymentStatus() {
-    console.log("Checking payment status...");
-    try {
-        const response = await axios.get(`${API_BASE_URL}/subscription/subscription-status`, {
-            params: { user_id: currentUser.user_id },
-            headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` }
+        const response = await axios.post(`${API_BASE_URL}/subscription/subscribe`, requestData, {
+            headers: getAuthHeaders()
         });
-        console.log("Payment status response:", response.data);
 
-        if (response.data.subscription_active) {
-            console.log("Subscription is active. Stopping polling...");
-            clearInterval(paymentStatusInterval);
-            showSuccess("Payment successful. Subscription activated!");
-            showSessionCountdown(response.data.time_left);
+
+        const additionalTime = response.data.time_in_seconds || 0;
+        let timeLeft = 0;
+        timeLeft += additionalTime;
+
+
+        if (response.data && response.data.message) {
+            showSuccess(response.data.message);
         } else {
-            console.log("Subscription not active yet. Polling continues...");
+            showSuccess("Subscription initiated. Please complete payment on your phone.");
         }
+
+        // Start polling for payment status
+        startPaymentStatusPolling();
+
     } catch (error) {
-        console.error("Error while checking payment status:", error);
+        // Enhanced error handling
+        console.error("Subscription error:", error.response ? error.response.data : error.message);
+
+        // Display user-friendly error message
+        if (error.response && error.response.data && error.response.data.detail) {
+            showError(error.response.data.detail);
+        } else {
+            showError("Subscription failed. Please try again.");
+        }
     }
 }
 
-// Start Polling for Payment Status
-function startPaymentStatusPolling() {
-    console.log("Starting payment status polling...");
-    if (paymentStatusInterval) clearInterval(paymentStatusInterval);
-    paymentStatusInterval = setInterval(checkPaymentStatus, 5000);
+//getts authentication hedres
+function getAuthHeaders() {
+    const token = localStorage.getItem("authToken");
+    return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-// 6. Show Session Countdown Timer
+// Start polling every 5 seconds after initiating payment
+function startPaymentStatusPolling() {
+    if (paymentStatusInterval) {
+        clearInterval(paymentStatusInterval);
+    }
+    if (!isCheckingSubscription) {
+        paymentStatusInterval = setInterval(checkUserSubscription, 5000);
+    }
+}
+
+// Fetch MAC address from the backend
+async function getMacAddress() {
+    try {
+        const response = await axios.get(`${API_BASE_URL}/mac_address/mac-address`);
+        return response.data.mac_address || "00:00:00:00:00:00";
+    } catch (error) {
+        console.error("Failed to retrieve MAC address:", error);
+        return "00:00:00:00:00:00";
+    }
+}
+
+// Initialize the OTP verification page
+function initOTPPage() {
+    const form = document.querySelector("form");
+    const phoneNumberDisplay = document.getElementById("phone-number-display");
+
+    const phoneNumber = localStorage.getItem("phone_number");
+    if (phoneNumber && phoneNumberDisplay) {
+        phoneNumberDisplay.textContent = phoneNumber;
+    }
+
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const otp = document.getElementById("otp").value;
+
+        try {
+            const response = await axios.post(`${API_BASE_URL}/user/verify-otp`, {
+                phone_number: phoneNumber,
+                otp_code: otp,
+            });
+            const { access_token, message } = response.data;
+            localStorage.setItem("authToken", access_token);
+            redirectTo('/');
+        } catch (error) {
+            console.error("OTP verification failed:", error);
+            showError("Invalid OTP. Please try again.");
+        }
+    });
+}
+
+// Utility for error messages
+function showError(message) {
+    console.error(message);
+    alert(message); // Simple error alert for now
+}
+
+// Utility for success messages
+function showSuccess(message) {
+    console.log(message);
+    alert(message); // Simple success alert for now
+}
+
+
+// Session countdown timer
 function showSessionCountdown(timeLeft) {
-    console.log("Starting session countdown. Time left:", timeLeft);
     const countdownContainer = document.createElement('div');
     countdownContainer.className = 'countdown-container';
-    document.querySelector('.container').innerHTML = '';
-    document.querySelector('.container').appendChild(countdownContainer);
-
-    countdownContainer.innerHTML = `
-        <div class="countdown-container-message">
-            <h3>Tik Tok <br> Goes The Clock</h3>
-            <p>Enjoy The Internet :)</p>
-        </div>
-    `;
+    document.body.innerHTML = '';
+    document.body.appendChild(countdownContainer);
 
     const timerText = document.createElement('p');
-    timerText.className = 'timer-text';
     countdownContainer.appendChild(timerText);
 
-    const buyMore = document.createElement('button');
-    buyMore.className = 'buy-more-button';
-    buyMore.textContent = "Buy More Time";
-    countdownContainer.appendChild(buyMore);
-
-    const plansContainer = document.createElement('div');
-    plansContainer.className = 'plans-container hidden';  // Hidden by default
-    plansContainer.innerHTML = `
-        <div class="plans">
-        <div class="plan-card" data-plan="1hr">
-            <h3>1 Hour</h3>
-            <p>KSh 10</p>
-        </div>
-        <div class="plan-card" data-plan="2hrs">
-            <h3>2 Hours</h3>
-            <p>KSh 20</p>
-        </div>
-        <div class="plan-card" data-plan="3hrs">
-            <h3>3 Hours</h3>
-            <p>KSh 30</p>
-        </div>
-        <div class="plan-card" data-plan="8hrs">
-            <h3>8 Hours</h3>
-            <p>KSh 80</p>
-        </div>
-        <div class="plan-card" data-plan="12hrs">
-            <h3>12 Hours</h3>
-            <p>KSh 100</p>
-        </div>
-        <div class="plan-card" data-plan="24hrs">
-            <h3>24 Hours</h3>
-            <p>KSh 150</p>
-        </div>
-        <div class="plan-card" data-plan="3 days">
-            <h3>3 Days</h3>
-            <p>KSh 300</p>
-        </div>
-        <div class="plan-card" data-plan="1 week">
-            <h3>1 Week</h3>
-            <p>KSh 550</p>
-        </div>
-        <div class="plan-card" data-plan="2 weeks">
-            <h3>2 Weeks</h3>
-            <p>KSh 1000</p>
-        </div>
-        <div class="plan-card" data-plan="monthly">
-            <h3>Monthly</h3>
-            <p>KSh 1750</p>
-        </div>
-    </div>
-    <button id="subscribeBtn" class="hidden">Subscribe</button>
-    `;
-    document.querySelector('.container').appendChild(plansContainer);
-
-    buyMore.addEventListener('click', () => {
-        console.log("User clicked 'Buy More Time'. Showing available plans...");
-        plansContainer.classList.toggle('hidden');
-    });
-
-    plansContainer.addEventListener('click', (event) => {
-        if (event.target.classList.contains('plan-card')) {
-            console.log(`Plan selected: ${event.target.getAttribute('data-plan')}`);
-            initSubscriptionPage();
-        }
-    });
-
-    function updateCountdown() {
+    const interval = setInterval(() => {
         if (timeLeft <= 0) {
-            console.warn("Session expired. Redirecting user...");
-            clearInterval(countdownInterval);
-            countdownContainer.innerHTML = "<p>Session expired. Please select a plan.</p>";
-            return;
+            clearInterval(interval);
+            showError("Session expired.");
+        } else {
+            const hours = Math.floor(timeLeft / 3600);
+            const minutes = Math.floor((timeLeft % 3600) / 60);
+            const seconds = timeLeft % 60;
+            timerText.textContent = `Time left: ${hours}h ${minutes}m ${seconds}s`;
+            timeLeft--;
         }
-
-        const hours = Math.floor(timeLeft / 3600);
-        const minutes = Math.floor((timeLeft % 3600) / 60);
-        const seconds = Math.floor(timeLeft % 60);
-        timerText.textContent = `Session time left: ${hours}h ${minutes}m ${seconds}s`;
-        console.log(`Updated countdown: ${hours}h ${minutes}m ${seconds}s`);
-        timeLeft--;
-    }
-
-    countdownInterval = setInterval(updateCountdown, 1000);
-    updateCountdown();
+    }, 1000);
 }
-
-// time utilty function
-function displayTimeInLocalFormat(utcTime) {
-    const date = new Date(utcTime);
-    const options = { timeZone: 'Africa/Nairobi', hour12: false };
-    console.log(new Intl.DateTimeFormat('en-KE', options).format(date));
-}
-
-
-// Utility Functions for Error/Success Messages
-function showError(message) {
-    console.error("Displaying error message:", message);
-    const error = document.createElement('div');
-    error.className = 'error';
-    error.textContent = message;
-    document.querySelector('.container').appendChild(error);
-    setTimeout(() => error.remove(), 3000);
-}
-
-function showSuccess(message) {
-    console.log("Displaying success message:", message);
-    const success = document.createElement('div');
-    success.className = 'success';
-    success.textContent = message;
-    document.querySelector('.container').appendChild(success);
-    setTimeout(() => success.remove(), 3000);
-}
-
-
-
-// File: app/static/style.css
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-}
-
-body {
-    background: #f0f2f5;
-    color: #1a1a1a;
-    line-height: 1.6;
-}
-
-.titlename{
-    padding-top: 2rem;
-}
-.page-container {
-    position: relative;
-    min-height: 100vh;
-}
-
-main {
-    padding-bottom: 2rem;
-}
-
-/* Header and Footer Styling */
-#footer {
-    position: absolute;
-    bottom: 0;
-    width: 100%;
-    height: 3rem;
-    background-color: #1a73e8;
-    color: white;
-    padding: 1rem;
-    text-align: center;
-}
-
-/* Container Styling */
-.container {
-    max-width: 400px;
-    margin: 2rem auto;
-    padding: 2rem;
-    background: white;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    text-align: center;
-}
-
-.contdown-container {
-    max-width: 400px;
-    margin: 2rem auto;
-    padding: 1rem;
-}
-
-h1, h2, h3 {
-    text-align: center;
-    color: #1a73e8;
-    margin-bottom: 1rem;
-}
-
-/*form and input styling*/
-label {
-    display: block;
-    margin: 1rem 0 0.5rem;
-    text-align:center;
-    color: #666;
-}
-
-form {
-    text-align: center;
-}
-input[type="tel"], input[type="text"] {
-    width: 100%;
-    padding: 0.75rem;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    font-size: 1rem;
-    margin-bottom: 1rem;
-    text-align: center;
-}
-
-/*button styling*/
-button {
-    width: 100%;
-    padding: 0.75rem;
-    background: #1a73e8;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: background 0.3s;
-}
-
-button:hover {
-    background: #1557b0;
-}
-
-a {
-    color: #1a73e8;
-    text-decoration: none;
-    display: inline-block;
-    margin-top: 1rem;
-}
-
-/* Error and Success Message */
-.error {
-    color: #d93025;
-    margin-top: 0.5rem;
-    font-size: 0.875rem;
-}
-
-.success {
-    color: #188038;
-    margin-top: 0.5rem;
-    font-size: 0.875rem;
-}
-
-/******************************************************/
-.card, .card3 {
-    background: white;
-    border-radius: 8px;
-    padding: 2rem;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    text-align: center;
-}
-
-.card3 {
-    margin-top: 10px;
-}
-
-.form-group {
-    margin-bottom: 1rem;
-}
-
-
-
-.plans {
-    display: grid;
-    gap: 1rem;
-    margin-top: 1rem;
-}
-
-.plan-card {
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    padding: 1rem;
-    cursor: pointer;
-    transition: all 0.3s;
-}
-
-.plan-card:hover {
-    border-color: #1a73e8;
-    transform: translateY(-2px);
-}
-
-.plan-card.selected {
-    border-color: #1a73e8;
-    background: #f8f9fe;
-}
-
-
-
-.hidden {
-    display:none;
-}
-
-.icon-container {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: fit-content;
-}
-
-.safari-icon {
-    height: 200px;
-}
-
-
-// File: app/templates/base.html
-<!DOCTYPE html>
-<html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>{% block title %}Safari Connect Portal{% endblock %}</title>
-        <link rel="stylesheet" href="/static/style.css" />
-        <link
-        rel="shortcut icon"
-        href="/static/resources/safari-icon2.svg"
-        type="image/x-icon"
-        />
-    </head>
-    <body>
-        <div class="page-container">
-            <main>{% block content %}{% endblock %}</main>
-
-            <footer id="footer">
-                <p>&copy; 2024 Safari Connect</p>
-            </footer>
-        </div>
-
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.2/axios.min.js"></script>
-        <script src="/static/index.js"></script>
-    </body>
-</html>
-
-
-
-// File: app/templates/index.html
-{% extends "base.html" %}
-
-{% block title %}Safari Connect - Welcome{% endblock %}
-
-{% block content %}
-{% include "logo.html" %}
-<div class="container">
-    <p>Register to enjoy our internet services.</p>
-
-    <form>
-        <label for="phone">Phone Number</label>
-        <input type="tel" id="phone" name="phone_number" placeholder="+254 XXXXXX" required>
-        <button type="submit">Login</button>
-    </form>
-</div>
-{% endblock %}
-
-
-// File: app/templates/logo.html
-<h1 class="titlename">Safari Connect</h1>
-<div class="icon-container">
-    <img class="safari-icon" src="/static/resources/safari-icon2.svg" alt="safari connect">
-</div>
-<p style="align-self: center; text-align: center; font-size: medium; font-weight: 300;font-style:italic; font-family: Arial, Helvetica, sans-serif;">
-    Explore A Universe Of Possibilities</p>
-
-
-// File: app/templates/otp_verification.html
-{% extends "base.html" %}
-
-{% block title %}Safari Connect - OTP Verification{% endblock %}
-
-{%block content%}
-{% include "logo.html" %}
-<div class="container">
-    <h2>OTP Verification</h2>
-    <p>Please enter the OTP sent to your phonr to compete verification.</p>
-
-    <form id="otp-form" onsubmit="return false;">
-        <label for="otp">OTP Code:</label>
-        <input type="text" id="otp" name="otp_code" placeholder="Enter OTP code" required>
-        <button type="submit">Verify OTP</button>
-    </form>
-</div>
-{% endblock %}
-
-
-
-// File: app/templates/subscription_expired.html
-{% extends "base.html" %}
-
-{% block title %}Safari Connect - Subscription Expired{% endblock %}
-
-{% block content %}
-{% include "logo.html" %}
-<div class="container">
-    <h2>Subscription Expired</h2>
-    <p>Your subscription has expired. Please renew to continue enjoying our services.</p>
-    <a href="/" class="button-link">Return to Home</a>
-</div>
-{% endblock %}
-
-
-
-
-// File: app/templates/subscription_success.html
-{% extends "base.html" %}
-
-{% block title %}Safari Connect - Subscription Plans{% endblock %}
-
-{% block content %}
-{% include "logo.html" %}
-<div class="container">
-    <h2>Select a Subscription Plan</h2>
-    <p>Choose a plan to continue enjoying internet services.</p>
-
-    <div class="plans">
-        <div class="plan-card" data-plan="1hr">
-            <h3>1 Hour</h3>
-            <p>KSh 10</p>
-        </div>
-        <div class="plan-card" data-plan="2hrs">
-            <h3>2 Hours</h3>
-            <p>KSh 20</p>
-        </div>
-        <div class="plan-card" data-plan="3hrs">
-            <h3>3 Hours</h3>
-            <p>KSh 30</p>
-        </div>
-        <div class="plan-card" data-plan="8hrs">
-            <h3>8 Hours</h3>
-            <p>KSh 80</p>
-        </div>
-        <div class="plan-card" data-plan="12hrs">
-            <h3>12 Hours</h3>
-            <p>KSh 100</p>
-        </div>
-        <div class="plan-card" data-plan="24hrs">
-            <h3>24 Hours</h3>
-            <p>KSh 150</p>
-        </div>
-        <div class="plan-card" data-plan="3 days">
-            <h3>3 Days</h3>
-            <p>KSh 300</p>
-        </div>
-        <div class="plan-card" data-plan="1 week">
-            <h3>1 Week</h3>
-            <p>KSh 550</p>
-        </div>
-        <div class="plan-card" data-plan="2 weeks">
-            <h3>2 Weeks</h3>
-            <p>KSh 1000</p>
-        </div>
-        <div class="plan-card" data-plan="monthly">
-            <h3>Monthly</h3>
-            <p>KSh 1750</p>
-        </div>
-    </div>
-    <button id="subscribeBtn" class="hidden">Subscribe</button>
-</div>
-{% endblock %}
-
-
 
 // File: app/utils/timezone.py
 # app/utils/timezone.py
@@ -1951,7 +1674,7 @@ from datetime import datetime, timezone
 import pytz
 
 def current_utc_time():
-    return datetime.now(timezone.utc)
+    return datetime.now().replace(tzinfo=timezone.utc)
 
 def utc_to_eat(utc_time):
     eat_time_zone = pytz.timezone('Africa/Nairobi')
@@ -1965,23 +1688,30 @@ import subprocess
 import time
 import json
 
-def getAddress():
-    """Retrieve the IPv4 address of the host."""
-    hostname = socket.gethostname()
+def get_address():
+    """Retrieve the IPv4 address of the active network interface."""
     try:
-        ipv4 = socket.gethostbyname(hostname)
-        return ipv4
-    except socket.gaierror as e:
-        print(f"Error getting IP address: {e}")
+        hostname = socket.gethostname()
+        local_address = socket.gethostbyname(hostname)
+
+        if local_address.startswith("127."):
+            # use socket lib to look at available interfaces
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("192.168.0.1", 80))
+                local_address = s.getsockname()[0]
+        return local_address
+    except Exception as e:
+        print(f"Error getting IPV4 address: {e}")
         return None
 
 
-def update_env(ipv4, ngrok_url):
+def update_env(local_address, ngrok_link):
     """Update the .env file with the provided IPv4 and callback URL."""
     env_file_path = ".env"
-    db_url = f'DATABASE_URL="postgresql://safariconnect:1Amodung%40%21.@{ipv4}:5432/safaridb"\n'
-    cb_url = f'CALLBACK_URL="{ngrok_url}/payment/mpesa/callback"\n\n'
-    ngrok = f'NGROK_URL="{ngrok_url}"\n\n'
+    db_url = f'DATABASE_URL="postgresql://safariconnect:1Amodung%40%21.@{local_address}:5432/safaridb"\n'
+    cb_url = f'CALLBACK_URL="{ngrok_link}/payment/mpesa/callback"\n'
+    ngrok = f'NGROK_URL="{ngrok_link}"\n'
+    ipv4_ip = f'IPV4_CURRENT="http://{local_address}:8000"\n'
 
     if not os.path.exists(env_file_path):
         with open(env_file_path, 'w') as env_file:
@@ -1991,55 +1721,62 @@ def update_env(ipv4, ngrok_url):
     with open(env_file_path, 'r') as env_file:
         lines = env_file.readlines()
 
-    updated = False
     with open(env_file_path, 'w') as env_file:
         for line in lines:
             if line.startswith('DATABASE_URL'):
                 env_file.write(db_url)
-                updated = True
             elif line.startswith('CALLBACK_URL'):
                 env_file.write(cb_url)
-                updated = True
             elif line.startswith('NGROK_URL'):
-                if line.strip() != ngrok.strip():
-                    env_file.write(ngrok)
-                    updated = True
+                env_file.write(ngrok)
+            elif line.startswith('IPV4_CURRENT'):
+                env_file.write(ipv4_ip)
             else:
                 env_file.write(line)
                 
         if not any(line.startswith('NGROK_URL') for line in lines):
             env_file.write(ngrok)
+        elif not any(line.startswith('IPV4_CURRENT') for line in lines):
+            env_file.write(ipv4_ip)
 
 def get_ngrok_url():
     """Start ngrok and retrieve the public URL."""
     try:
         process = subprocess.Popen(['ngrok', 'http', '8000'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        for _ in range(10):  # Wait up to 10 seconds for ngrok to start
+        for _ in range(20):  # Increased wait time to 20 seconds for Ngrok to fully start
             time.sleep(1)
             output, error = subprocess.Popen(
                 ['curl', '--silent', 'http://localhost:4040/api/tunnels'],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE
             ).communicate()
+
+            if error:
+                print(f"Error while checking ngrok status: {error.decode('utf-8')}")
+                continue
+
             if output:
                 try:
                     tunnels = json.loads(output.decode('utf-8'))
                     for tunnel in tunnels.get("tunnels", []):
                         if "http" in tunnel["public_url"]:
-                            process.terminate()  # Clean up ngrok process
+                            process.terminate()  # Clean up ngrok process after success
                             return tunnel["public_url"]
                 except (json.JSONDecodeError, KeyError) as e:
                     print(f"Error parsing ngrok response: {e}")
-        process.terminate()
+                    continue
+
+        process.terminate()  # Terminate ngrok if no valid URL found
         print("Timeout waiting for ngrok.")
         return None
+
     except Exception as e:
         print(f"Error starting ngrok: {e}")
         return None
 
-def start_server(ipv4):
+def start_server(local_address):
     """Start the server using Uvicorn."""
     process = subprocess.Popen(
-        ["uvicorn", "app.main:app", "--host", ipv4, "--port", "8000", "--reload"]
+        ["uvicorn", "app.main:app", "--host", local_address, "--port", "8000", "--reload"]
     )
     try:
         process.wait()
@@ -2049,7 +1786,7 @@ def start_server(ipv4):
         process.wait()
 
 if __name__ == "__main__":
-    ipv4 = getAddress()
+    ipv4 = get_address()
     ngrok_url = get_ngrok_url()
 
     if ipv4 and ngrok_url:
@@ -2176,205 +1913,6 @@ function isRegistrationSuccessful() {
 }
 
 
-
-// File: OpenWRT/dhcp
-# /etc/config/dhcp
-config dnsmasq
-    option domainneeded '1'
-    option boguspriv '1'
-    option filterwin2k '0'
-    option localise_queries '1'
-    option rebind_protection '1'
-    option rebind_localhost '1'
-    option local '/lan/'
-    option domain 'lan'
-    option expandhosts '1'
-    option nonegcache '0'
-    option authoritative '1'
-    option readethers '1'
-    option leasefile '/tmp/dhcp.leases'
-    option resolvfile '/tmp/resolv.conf.auto'
-
-config dhcp 'lan'
-    option interface 'lan'
-    option start '100'
-    option limit '150'
-    option leasetime '12h'
-
-
-// File: OpenWRT/firewll
-# Firewall rules (/etc/config/firewall)
-# Allow access to captive portal
-config rule
-    option name 'Allow-Captive-Portal'
-    option src 'lan', 'wlan', 'wan'
-    option dest_port '8000'
-    option proto 'tcp'
-    option target 'ACCEPT'
-
-# Block all other traffic for unauthenticated users
-config rule
-    option name 'Block-Unauthenticated'
-    option src 'lan'
-    option proto 'all'
-    option target 'DROP'
-
-# Config for Mpesa Callback IPS Whitelist
-config rule
-    option name 'Allow-Mpesa-Callback-1'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102'
-    option dest_port '8000'
-    option src_ip '196.201.214.200'
-    option target 'ACCEPT'
-
-config rule
-    option name 'Allow-Mpesa-Callback-2'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102'
-    option dest_port '8000'
-    option src_ip '196.201.214.206'
-    option target 'ACCEPT'
-
-config rule
-    option name 'Allow-Mpesa-Callback-3'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102'
-    option dest_port '8000'
-    option src_ip '196.201.213.114'
-    option target 'ACCEPT'
-
-config rule
-    option name 'Allow-Mpesa-Callback-4'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102'
-    option dest_port '8000'        
-    option src_ip '196.201.214.207'
-    option target 'ACCEPT'
-
-config rule
-    option name 'Allow-Mpesa-Callback-5'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102'
-    option dest_port '8000'
-    option src_ip '196.201.214.208'
-    option target 'ACCEPT'
-
-config rule
-    option name 'Allow-Mpesa-Callback-6'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102'
-    option dest_port '8000'
-    option src_ip '196.201.213.44'
-    option target 'ACCEPT'
-    
-config rule
-    option name 'Allow-Mpesa-Callback-7'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102'
-    option dest_port '8000'             
-    option src_ip '196.201.212.127'
-    option target 'ACCEPT'
-
-config rule
-    option name 'Allow-Mpesa-Callback-8'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102'
-    option dest_port '8000'
-    option src_ip '196.201.212.138'
-    option target 'ACCEPT'
-
-config rule
-    option name 'Allow-Mpesa-Callback-9'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102'
-    option dest_port '8000'
-    option src_ip '196.201.212.129'
-    option target 'ACCEPT'
-    
-config rule
-    option name 'Allow-Mpesa-Callback-10'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102' 
-    option dest_port '8000'              
-    option src_ip '196.201.212.136'
-    option target 'ACCEPT'
-
-config rule
-    option name 'Allow-Mpesa-Callback-11'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102'
-    option dest_port '8000'
-    option src_ip '196.201.212.74'
-    option target 'ACCEPT'
-
-config rule
-    option name 'Allow-Mpesa-Callback-12'
-    option src 'wan'
-    option dest 'lan'
-    option proto 'tcp'
-    option dest_ip '192.168.0.102'
-    option dest_port '8000'
-    option src_ip '196.201.212.69'
-    option target 'ACCEPT'
-
-
-
-
-// File: OpenWRT/network
-# /etc/config/network
-config interface 'loopback' # type: ignore
-    option device 'lo' # type: ignore
-    option proto 'static' # type: ignore
-    option ipaddr '127.0.0.1' # type: ignore
-    option netmask '255.0.0.0' # type: ignore
-
-config interface 'lan' # type: ignore
-    option device 'eth0' # type: ignore
-    option proto 'static' # type: ignore
-    option ipaddr '192.168.1.1' # type: ignore
-    option netmask '255.255.255.0' # type: ignore
-
-
-// File: OpenWRT/nodogsplash
-# /etc/config/nodogsplash
-config nodogsplash
-    option enabled '1'
-    option gatewayname 'WiFi Hotspot'
-    option gatewayinterface 'br-lan'
-    option maxclients '250'
-    option clientidletimeout '1440'
-    option webroot '/etc/nodogsplash/htdocs'
-    option redirecturl 'http://your-portal-url'
-    
-# Authentication script
-option authenticateimmediately '0'
-option passwordattempts '5'
-option gatewayiprange '192.168.1.0/24'
-
-
 // File: requirements.txt
 fastapi
 uvicorn
@@ -2388,44 +1926,3 @@ pydantic-settings
 pytz
 jinja2
 httpx
-
-
-// File: secret.py
-import secrets
-
-def secretKey():
-    secret= secrets.token_hex(64)
-    print(f"{secret}\n")
-
-secretKey()
-
-
-// File: tests/dbconfig.py
-from sqlalchemy import create_engine, MetaData
-
-DATABASE_URL = "postgresql://safariconnect:1Amodung%40%21.@192.168.0.100:5432/safaridb"
-engine = create_engine(DATABASE_URL)
-metadata = MetaData()
-
-# Test connection
-try:
-    with engine.connect() as connection:
-        print("Database connected successfully.")
-except Exception as e:
-    print(f"Error connecting to database: {e}")
-
-
-
-// File: tests/testotp.py
-def generate_otp():
-    # Generate 6-digit OTP
-    import random
-    return str(random.randint(100000, 999999))
-
-try:
-    otp = generate_otp()
-    print(f"OTP GENERATED: {otp}")
-except Exception as e:
-    print(f"Error generating OTP: {e}")
-
-

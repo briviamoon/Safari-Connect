@@ -22,7 +22,7 @@
 ##  Table of Contents
 
 - [ Overview](#-overview)
-- [ Features](#-features)
+- [ Features](##-features)
 - [ Project Structure](#-project-structure)
   - [ Project Index](#-project-index)
 - [ Getting Started](#-getting-started)
@@ -39,20 +39,22 @@
 
 ##  Overview
 
-<code>❯ I'll add this later, You'll have to go through it manually for now.</code>
+<code> This a Public Hotspot Management System Handling User Connection, Billing, Session management and Analytics</code>
 
 ---
 
 ##  Features
 
-<code>❯ Same for this one...</code>
+<code> - Mpesa Intergrated Service Subscription Web-UI</code><br> 
+<code> - Local postgres user Database </code><br>
+
 
 ---
 
 ##  Project Structure
 
 ```sh
-└── /
+|Safari-connect /
     ├── OpenWRT
     │   ├── dhcp
     │   ├── firewll
@@ -91,31 +93,11 @@
 				<td><code>❯ REPLACE-ME</code></td>
 			</tr>
 			<tr>
-				<td><b><a href='/cirl.sh'>cirl.sh</a></b></td>
-				<td><code>❯ REPLACE-ME</code></td>
-			</tr>
-			<tr>
-				<td><b><a href='/code_context.txt'>code_context.txt</a></b></td>
-				<td><code>❯ REPLACE-ME</code></td>
-			</tr>
-			<tr>
 				<td><b><a href='/requirements.txt'>requirements.txt</a></b></td>
 				<td><code>❯ REPLACE-ME</code></td>
 			</tr>
 			<tr>
-				<td><b><a href='/logic flow.scss'>logic flow.scss</a></b></td>
-				<td><code>❯ REPLACE-ME</code></td>
-			</tr>
-			<tr>
-				<td><b><a href='/callback.json'>callback.json</a></b></td>
-				<td><code>❯ REPLACE-ME</code></td>
-			</tr>
-			<tr>
 				<td><b><a href='/initserver.py'>initserver.py</a></b></td>
-				<td><code>❯ REPLACE-ME</code></td>
-			</tr>
-			<tr>
-				<td><b><a href='/get_code_context.sh'>get_code_context.sh</a></b></td>
 				<td><code>❯ REPLACE-ME</code></td>
 			</tr>
 			</table>
@@ -367,16 +349,6 @@ Run  using the following command:
 ❯ python3 initserver.py
 ```
 
-
-###  Testing
-Run the test suite using the following command:
-**Using `pip`** &nbsp; [<img align="center" src="https://img.shields.io/badge/Pip-3776AB.svg?style={badge_style}&logo=pypi&logoColor=white" />](https://pypi.org/project/pip/)
-
-```sh
-❯ pytest
-```
-
-
 ---
 ##  Project Roadmap
 
@@ -391,9 +363,9 @@ Run the test suite using the following command:
 
 ##  Contributing
 
-- **💬 [Join the Discussions](https://LOCAL///discussions)**: Share your insights, provide feedback, or ask questions.
-- **🐛 [Report Issues](https://LOCAL///issues)**: Submit bugs found or log feature requests for the `` project.
-- **💡 [Submit Pull Requests](https://LOCAL///blob/main/CONTRIBUTING.md)**: Review open PRs, and submit your own PRs.
+- **💬 [Join the Discussions](https://github.com/briviamoon/Safari-Connect/discussions)**: Share your insights, provide feedback, or ask questions.
+- **🐛 [Report Issues](https://github.com/briviamoon/Safari-Connect/issues)**: Submit bugs found or log feature requests for the `` project.
+- **💡 [Submit Pull Requests](https://github.com/briviamoon/Safari-Connect/blob/Development/CONTRIBUTING.md)**: Review open PRs, and submit your own PRs.
 
 <details closed>
 <summary>Contributing Guidelines</summary>
@@ -424,7 +396,7 @@ Run the test suite using the following command:
 <summary>Contributor Graph</summary>
 <br>
 <p align="left">
-   <a href="https://LOCAL{///}graphs/contributors">
+   <a href="https://github.com/briviamoon/Safari-Connect/blob/Development/graphs/contributors">
       <img src="https://contrib.rocks/image?repo=/">
    </a>
 </p>
@@ -434,12 +406,12 @@ Run the test suite using the following command:
 
 ##  License
 
-This project is protected under the [LICENSE](...) License. For more details, refer to the [LICENSE](https://choosealicense.com/licenses/) file.
+This project is protected under the [GNU Affero General Public License v3.0](https://github.com/briviamoon/Safari-connect/LICENSE) License. For more details, refer to the file.
 
 ---
 
 ##  Acknowledgments
 
-- If you Feel Like this is something that could help alot of people go into bussines, or even yourself, IDK, you're welcome to contribute.
+- If you Feel Like this is something that could help alot of people go into bussines, or even yourself, you're welcome to contribute.
 
 ---

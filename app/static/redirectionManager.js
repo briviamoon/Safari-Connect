@@ -3,6 +3,9 @@ let isRedirectionHandled = false;
 // Initialize redirection management
 function initRedirectionManager() {
     document.addEventListener('DOMContentLoaded', () => {
+        if (window.location.pathname !== "/subscription/subscription-plans") {
+            localStorage.removeItem('subStatusChecked');
+        }
         clearRedirectionFlag();
         manageRedirects();
     });
@@ -35,7 +38,8 @@ function handleAuthenticatedRedirect(token) {
     console.log("Decoded Token: ",decodedToken);
     if (!decodedToken || isTokenExpired(decodedToken)) {
         redirectTo('/user/otp-verification');
-    } else if (!getSubscriptionStatus(decodedToken.user_id) && !isRedirectionHandled) {
+    } else if (!getSubscriptionStatus(decodedToken.user_id) && isSubStatusChecked() == null ) {
+        subStatusChecked();
         redirectTo('/subscription/subscription-plans');
     }
 }
@@ -52,6 +56,13 @@ function redirectTo(path) {
     isRedirectionHandled = true;
 }
 
+//
+function subStatusChecked() {
+    localStorage.setItem('subStatusChecked', true);
+}
+function isSubStatusChecked(){
+    return localStorage.getItem('subStatusChecked')
+}
 // Utility to clear any redirection flags
 function clearRedirectionFlag() {
     localStorage.removeItem('redirectedOnInactive');

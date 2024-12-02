@@ -89,7 +89,7 @@ function finalizeSubscriptionCheck() {
 function maybeRedirect() {
     if (!localStorage.getItem('redirectedOnInactive')) {
         localStorage.setItem('redirectedOnInactive', 'true');
-        redirectTo('/subscription/subscription-success');
+        redirectTo('/subscription/subscription-plans');
     }
 }
 
@@ -189,7 +189,7 @@ async function registerUser() {
 
 //Subscribe action
 document.addEventListener("DOMContentLoaded", function () {
-    if (window.location.pathname == "subscription/subscription-success") {
+    if (window.location.pathname == "subscription/subscription-plans") {
         const planCards = document.querySelectorAll(".plan-card");
         const subscribeButton = document.getElementById("subscribeBtn");
 

@@ -99,8 +99,8 @@ async def check_subscription_status(user_id: int, db: Session = Depends(get_db))
     """
     try:
         subscription = db.query(Subscription).filter(
-            Subscription.user_id == user_id,
-            Subscription.is_active == True,
+            Subscription.user_id,
+            Subscription.is_active,
             Subscription.end_time > datetime.now(timezone.utc)
         ).first()
 
@@ -110,9 +110,7 @@ async def check_subscription_status(user_id: int, db: Session = Depends(get_db))
                 subscription.end_time = subscription.end_time.replace(tzinfo=timezone.utc)
                 
             time_left = (subscription.end_time - current_utc_time()).total_seconds()
-            return {"subscription_active": True, "time_left": max(time_left, 0)}
-        else:
-            return {"subscription_active": False, "time_left": 0}
+            return {"subscription_active": subscription.is_active, "time_left": max(time_left, 0)}
 
     except SQLAlchemyError as e:
         logging.error(f"Database error while checking subscription for user {user_id}: {e}")
@@ -157,7 +155,7 @@ async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
     # Check for an active subscription
     active_subscription = db.query(Subscription).filter(
         Subscription.user_id == user.id,
-        Subscription.is_active == True,
+        Subscription.is_active == user.is_active,
         Subscription.end_time > datetime.now(timezone.utc)
     ).first()
 
@@ -167,7 +165,7 @@ async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
         session_data = {
             "sub": user.phone_number,
             "message": "Enjoying your Internet?",
-            "subscription_active": True,
+            "subscription_active": user.is_active,
             "time_left": time_left,
             "plan_type": active_subscription.plan_type,
             "user_id": user.id

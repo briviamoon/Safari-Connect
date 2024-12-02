@@ -127,6 +127,14 @@ def initiate_mpesa_payment(subscription_id: int, amount: float, db: Session):
 # redirect user to plans
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
-@router.get("/subscription-success", response_class=HTMLResponse)
+@router.get("/subscription-plans", response_class=HTMLResponse)
 async def subscription_success_page(request: Request):
-    return templates.TemplateResponse("subscription_success.html", {"request": request})
+    return templates.TemplateResponse("subscription_plans.html", {"request": request})
+
+@router.get("/buy-plans", response_class=HTMLResponse)
+async def buy_subscription_plan(request: Request):
+    return templates.TemplateResponse("plans.html", {"request": request})
+
+@router.get("/buy-more-plans", response_class=HTMLResponse)
+async def buy_more_plans(request: Request):
+    return templates.TemplateResponse("more-plans.html", {"request": request})

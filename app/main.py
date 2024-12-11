@@ -23,14 +23,14 @@ ALLOWED_HEADERS = ["*"]
 # Configure CORS settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[f"{NGROK_URL}"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods= ALLOWED_METHODS,
     allow_headers= ALLOWED_HEADERS,
 )
 
 # Middlewares
-app.middleware("http")(allow_ip_middleware)
+app.middleware("https")(allow_ip_middleware)
 
 # Routes
 app.include_router(user.router, prefix="/user", tags=["User"])
@@ -52,7 +52,7 @@ async def handle_options():
 async def home(request: Request):
     ngrok_url = settings.NGROK_URL
     ipv4_url = settings.IPV4_CURRENT
-    print(f"Serving NgrokURL as API BASE: {ngrok_url}\n")
+    print(f"Serving This URL as API BASE: {ngrok_url}\n")
     return templates.TemplateResponse("index.html", {"request": request, "skibidi": ngrok_url, "rizz": ipv4_url})
 
 # Check on the Session Token

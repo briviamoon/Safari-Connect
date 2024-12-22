@@ -353,7 +353,7 @@ Run  using the following command:
 ##  Project Roadmap
 
 - [X] **`Task 1`**: <strike>Building The client and Server Code Base.</strike>
-- [X] **`Task 2`**: Implement Flawless Mpesa Transaction and Database Interaction.
+- [X] **`Task 2`**: <strike>Implement Flawless Mpesa Transaction and Database Interaction.</strike>
 - [ ] **`Task 3`**: Implement Internet Access Authorization and Restriction Logic.
 - [ ] **`Task 4`**: Refactor Code base For Optimal workflow.
 - [ ] **`Task 5`**: Test On Mikrotik Hardware or Chosen Software Router.

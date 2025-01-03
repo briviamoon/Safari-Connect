@@ -12,7 +12,7 @@ ALLOWED_CALLBACK_IPS = [
 # allow ip to give callback to the API's
 async def allow_ip_middleware(request: Request, call_next):
     if request.url.path == "/payment/mpesa/callback" and request.client.host not in ALLOWED_CALLBACK_IPS:
-        # raise HTTPException(status_code=403, detail="Access denied: IP not Allowed")
+        HTTPException(status_code=403, detail=f"Access denied: IP not Allowed for {request.client.host}")
         return await call_next(request)
     return await call_next(request)
 

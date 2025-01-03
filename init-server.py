@@ -55,10 +55,11 @@ def update_env(local_address, ngrok_link):
         elif not any(line.startswith('IPV4_CURRENT') for line in lines):
             env_file.write(ipv4_ip)
 
-def get_ngrok_url():
+def get_ngrok_url(local_address):
     """Start ngrok and retrieve the public URL."""
+    port = "8000"
     try:
-        process = subprocess.Popen(['ngrok', 'http', '8000'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(['ngrok', 'http', f"http://{local_address}:{port}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         for _ in range(20):  # Increased wait time to 20 seconds for Ngrok to fully start
             time.sleep(1)
             output, error = subprocess.Popen(
@@ -75,8 +76,7 @@ def get_ngrok_url():
                     tunnels = json.loads(output.decode('utf-8'))
                     for tunnel in tunnels.get("tunnels", []):
                         if "http" in tunnel["public_url"]:
-                            process.terminate()  # Clean up ngrok process after success
-                            return tunnel["public_url"]
+                            return tunnel["public_url"], process
                 except (json.JSONDecodeError, KeyError) as e:
                     print(f"Error parsing ngrok response: {e}")
                     continue
@@ -89,7 +89,7 @@ def get_ngrok_url():
         print(f"Error starting ngrok: {e}")
         return None
 
-def start_server(local_address):
+def start_server(local_address, ngrok_process):
     """Start the server using Uvicorn."""
     process = subprocess.Popen(
         ["uvicorn", "app.main:app", "--host", local_address, "--port", "8000", "--reload"]
@@ -97,19 +97,23 @@ def start_server(local_address):
     try:
         process.wait()
     except KeyboardInterrupt:
-        print("\nStopping server...")
+        print("\nStopping server & ngrok process...")
         process.terminate()
         process.wait()
+        # also closing ngrok
+        if ngrok_process:
+            ngrok_process.terminate()
+            ngrok_process.wait()
 
 if __name__ == "__main__":
     ipv4 = get_address()
-    ngrok_url = get_ngrok_url()
+    ngrok_url, ngrok_process = get_ngrok_url(ipv4)
 
     if ipv4 and ngrok_url:
         print(f"IPv4: {ipv4}")
         print(f"ngrok: {ngrok_url}")
         update_env(ipv4, ngrok_url)
-        start_server(ipv4)
+        start_server(ipv4, ngrok_process)
     else:
         print("Failed to retrieve IP address or ngrok URL.")
 

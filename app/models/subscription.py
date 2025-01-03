@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean
 from app.config.database import Base
+from datetime import datetime, timezone
 
 # base model for Subscription in db
 

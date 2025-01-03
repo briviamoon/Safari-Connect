@@ -160,8 +160,8 @@ async def verify_otp(re: OtpRight, db: Session = Depends(get_db)):
     ).first()
 
     # Prepare session data
-    if active_subscription:
-        time_left = (active_subscription.end_time - datetime.now(timezone.utc)).total_seconds()
+    if active_subscription: 
+        time_left = (active_subscription.end_time - datetime.now()).total_seconds()
         session_data = {
             "sub": user.phone_number,
             "message": "Enjoying your Internet?",
